@@ -1,4 +1,4 @@
-program APKDeployMon;
+program apkmon;
 
 {$APPTYPE CONSOLE}
 
