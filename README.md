@@ -6,7 +6,7 @@ A Windows console application that monitors directories for Android shared libra
 
 ## Notes
 
-- Only monitors `.so` files to avoid infinite deployment loops. If this happens, maybe your project is rebuilding itself, or something else is causing the .so files to be recreated. It should only build when the .so files flag `FILE_ACTION_ADDED` is detected.
+- Only monitors `.so` files to avoid infinite deployment loops. If this happens, maybe your project is rebuilding itself, or something else is causing the .so files to be created consecutively. It should only build when the .so files flag `FILE_ACTION_ADDED` is detected.
 - Automatically detects Android emulators using `adb devices`
 - Supports multiple project monitoring simultaneously
 
