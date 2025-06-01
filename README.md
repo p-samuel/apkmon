@@ -17,6 +17,25 @@ A Windows console application that monitors directories for Android shared libra
 - Android SDK with ADB in PATH
 - Running Android emulator
 
+### Environment Setup
+
+With Android Studio and .NET Framework installed, add these directories to your System PATH environment variable:
+
+```
+C:\Users\<your_user>\AppData\Local\Android\Sdk\emulator
+C:\Users\<your_user>\AppData\Local\Android\Sdk\platform-tools
+C:\Windows\Microsoft.NET\Framework\v4.0.30319
+```
+![alt text](img/image.png)
+
+Add these environment variables to your user or system variables:
+
+- **BDS**: `C:\Program Files (x86)\Embarcadero\Studio\23.0`
+- **FrameworkDir**: `C:\Windows\Microsoft.NET\Framework\v4.0.30319`
+- **FrameworkVersion**: `v4.5`
+
+This ensures that MSBuild, adb, and other tools are accessible via the terminal.
+
 ## Usage
 
 1. Run `apkmon.exe`
