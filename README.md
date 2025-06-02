@@ -1,4 +1,4 @@
-# 👾apkmon - Delphi Android APK Deployment Monitor
+# 👾apkmon - Delphi to Android APK Deploymentf
 
 A Windows console application that monitors directories for Android shared library (.so) file changes and automatically builds/deploys APK files to Android emulators.
 
@@ -10,14 +10,12 @@ A Windows console application that monitors directories for Android shared libra
 - Automatically detects Android emulators using `adb devices`
 - Supports multiple project monitoring simultaneously
 
-## Requirements
+## Setup
 
 - Windows OS
 - Delphi/RAD Studio with Android development support
 - Android SDK with ADB in PATH
 - Running Android emulator
-
-### Environment Setup
 
 With Android Studio and .NET Framework installed, add these directories to your System PATH environment variable:
 
@@ -35,17 +33,6 @@ Add these environment variables to your user or system variables:
 - **FrameworkVersion**: `v4.5`
 
 This ensures that MSBuild, adb, and other tools are accessible via the terminal.
-
-## Usage
-
-1. Run `apkmon.exe`
-2. Enter the root directory to monitor (searches recursively)
-3. Enter project names to match (without .dproj extension)
-4. Select build configuration (Debug/Release)
-5. Choose action:
-   - **Build only**: Rebuilds project when .so files change
-   - **Deploy only**: Deploys existing APK to emulator
-   - **Build and Deploy**: Builds project then deploys to emulator
 
 ## How It Works
 
