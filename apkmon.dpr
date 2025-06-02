@@ -91,6 +91,10 @@ type
     FPendingFiles: TDictionary<string, TDateTime>;
     FFileStabilityDelay: Integer;
     FMaxWaitTime: Integer;
+    FBuildInProgress: Boolean;
+    FLastBuildTime: TDateTime;
+    FBuildCooldownSeconds: Integer;
+    FIgnorePatterns: TStringList;
     procedure InitializeMappers;
     procedure ScanForProjectFiles;
     function FindProjectInfo(const APKPath: string): TProjectInfo;
@@ -106,6 +110,8 @@ type
     function FindAPKRecursively(const StartDirectory: string): string;
     function IsFileStable(const FilePath: string): Boolean;
     procedure ProcessPendingFiles;
+    function ShouldIgnoreFile(const FilePath: string): Boolean;
+    function IsMainBuildOutputFile(const FilePath: string): Boolean;
   protected
     procedure Execute; override;
   public
@@ -130,6 +136,16 @@ begin
   FreeOnTerminate := True;
   InitializeMappers;
   ScanForProjectFiles;
+  FBuildInProgress := False;
+  FLastBuildTime := 0;
+  FBuildCooldownSeconds := 10;
+  FIgnorePatterns := TStringList.Create;
+  
+  // Add patterns to ignore (build output directories)
+  FIgnorePatterns.Add('\bin\Android64\');
+  FIgnorePatterns.Add('\Android64\');
+  FIgnorePatterns.Add('\__history\');
+  FIgnorePatterns.Add('\__recovery\');
 end;
 
 destructor TAPKMonitorThread.Destroy;
@@ -138,7 +154,8 @@ begin
   FDeployActionMapper.Free;
   FProjectNames.Free;
   FProjectFiles.Free;
-  FPendingFiles.Free;
+  FPendingFiles.Free;  
+  FIgnorePatterns.Free;
   inherited Destroy;
 end;
 
@@ -597,17 +614,22 @@ function TAPKMonitorThread.BuildProject(const ProjectFile: string): Boolean;
 var
   Command: string;
 begin
-  // Use Deploy target instead of just Build to create APK
-  Command := Format('msbuild "%s" /p:Config=%s /target:Deploy /p:platform=Android64',
-                   [ProjectFile, FBuildConfigMapper.GetString(FBuildConfig)]);
+  FBuildInProgress := True;
+  try
+    Command := Format('msbuild "%s" /p:Config=%s /target:Deploy /p:platform=Android64',
+                     [ProjectFile, FBuildConfigMapper.GetString(FBuildConfig)]);
 
-  LogMessage('Building and deploying project: ' + ExtractFileName(ProjectFile), 3);
-  Result := ExecuteCommand(Command);
+    LogMessage('Building and deploying project: ' + ExtractFileName(ProjectFile), 3);
+    Result := ExecuteCommand(Command);
 
-  if Result then
-    LogMessage('Build and deploy completed successfully', 1)
-  else
-    LogMessage('Build and deploy failed!', 2);
+    if Result then
+      LogMessage('Build and deploy completed successfully', 1)
+    else
+      LogMessage('Build and deploy failed!', 2);
+  finally
+    FBuildInProgress := False;
+    FLastBuildTime := Now;
+  end;
 end;
 
 procedure TAPKMonitorThread.DeployAPK(const APKPath: string);
@@ -757,7 +779,7 @@ begin
                 LogMessage('FILE_ACTION_ADDED: ' + ExtractFileName(FileName), 4);
                 FullPath := FWatchDirectory + '\' + FileName;
 
-                if FileExists(FullPath) then
+                if FileExists(FullPath) and not ShouldIgnoreFile(FullPath) then
                 begin
                   LogMessage('Shared library created: ' + ExtractFileName(FullPath), 4);
 
@@ -984,6 +1006,68 @@ begin
       CloseHandle(FileHandle);
   end;
 end;
+
+function TAPKMonitorThread.ShouldIgnoreFile(const FilePath: string): Boolean;
+var
+  NormalizedPath: string;
+begin
+  Result := False;
+  
+  if FBuildInProgress then
+  begin
+    LogMessage('Ignoring file change during build: ' + ExtractFileName(FilePath), 4);
+    Result := True;
+    Exit;
+  end;
+  
+  if (FLastBuildTime > 0) and (SecondsBetween(Now, FLastBuildTime) < FBuildCooldownSeconds) then
+  begin
+    LogMessage(Format('Ignoring file change during cooldown: %s', [ExtractFileName(FilePath)]), 4);
+    Result := True;
+    Exit;
+  end;
+  
+  // Only monitor .so files in the main build directory, not in library subdirectories
+  if not IsMainBuildOutputFile(FilePath) then
+  begin
+    LogMessage('Ignoring .so file not in main build directory: ' + ExtractFileName(FilePath), 4);
+    Result := True;
+    Exit;
+  end;
+end;
+
+function TAPKMonitorThread.IsMainBuildOutputFile(const FilePath: string): Boolean;
+var
+  NormalizedPath: string;
+  ConfigStr: string;
+begin
+  Result := False;
+  NormalizedPath := UpperCase(StringReplace(FilePath, '/', '\', [rfReplaceAll]));
+  ConfigStr := UpperCase(FBuildConfigMapper.GetString(FBuildConfig));
+
+  // Exclude library subdirectories and architecture-specific folders
+  if (Pos('\LIBRARY\', NormalizedPath) > 0) or
+     (Pos('\DEBUG\', NormalizedPath) > 0) and (Pos('\LIBRARY\', NormalizedPath) > 0) or
+     (Pos('\ARM64-V8A\', NormalizedPath) > 0) or
+     (Pos('\ARMEABI\', NormalizedPath) > 0) or
+     (Pos('\ARMEABI-V7A\', NormalizedPath) > 0) or
+     (Pos('\MIPS\', NormalizedPath) > 0) then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  // Only accept .so files that match the pattern: \bin\Android64\Debug\ (or Release)
+  // but NOT in subdirectories like \library\ or \debug\
+  if (Pos('\BIN\ANDROID64\' + ConfigStr + '\', NormalizedPath) > 0) and
+     (Pos('\BIN\ANDROID64\' + ConfigStr + '\' + UpperCase(ExtractFileName(FilePath)), NormalizedPath) > 0) then
+  begin
+    Result := True;
+    LogMessage('Accepting main build .so file: ' + FilePath, 4);
+  end;
+end;
+
+
 
 procedure TAPKMonitorThread.ProcessPendingFiles;
 var
