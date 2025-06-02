@@ -7,6 +7,7 @@ A Windows console application that monitors directories for Android shared libra
 ## Notes
 
 - Only monitors `.so` files to avoid infinite deployment loops. If this happens, maybe your project is rebuilding itself, or something else is causing the .so files to be created consecutively. It should only build when the .so files flag `FILE_ACTION_ADDED` is detected.
+- For the first build, you need to build the project manually via `Project > Deployment > Deploy`, so Delphi can insert set `Deploy` options in the `.dproj` file.
 - Automatically detects Android emulators using `adb devices`
 - Supports multiple project monitoring simultaneously
 
@@ -24,13 +25,14 @@ C:\Users\<your_user>\AppData\Local\Android\Sdk\emulator
 C:\Users\<your_user>\AppData\Local\Android\Sdk\platform-tools
 C:\Windows\Microsoft.NET\Framework\v4.0.30319
 ```
-![alt text](img/image.png)
 
 Add these environment variables to your user or system variables:
 
 - **BDS**: `C:\Program Files (x86)\Embarcadero\Studio\23.0`
 - **FrameworkDir**: `C:\Windows\Microsoft.NET\Framework\v4.0.30319`
 - **FrameworkVersion**: `v4.5`
+
+![alt text](img/image.png)
 
 This ensures that MSBuild, adb, and other tools are accessible via the terminal.
 

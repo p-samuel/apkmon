@@ -141,9 +141,12 @@ begin
   FBuildCooldownSeconds := 10;
   FIgnorePatterns := TStringList.Create;
   
-  // Add patterns to ignore (build output directories)
-  FIgnorePatterns.Add('\bin\Android64\');
-  FIgnorePatterns.Add('\Android64\');
+  // Add patterns to ignore (architecture-specific build subdirectories)
+  FIgnorePatterns.Add('\library\arm64-v8a\');
+  FIgnorePatterns.Add('\library\');
+  FIgnorePatterns.Add('\library\armeabi-v7a\');
+  FIgnorePatterns.Add('\library\armeabi\');
+  FIgnorePatterns.Add('\library\mips\');
   FIgnorePatterns.Add('\__history\');
   FIgnorePatterns.Add('\__recovery\');
 end;
@@ -1009,6 +1012,7 @@ end;
 
 function TAPKMonitorThread.ShouldIgnoreFile(const FilePath: string): Boolean;
 var
+  i: Integer;
   NormalizedPath: string;
 begin
   Result := False;
@@ -1027,10 +1031,22 @@ begin
     Exit;
   end;
   
-  // Only monitor .so files in the main build directory, not in library subdirectories
-  if not IsMainBuildOutputFile(FilePath) then
+  // Check against ignore patterns
+  NormalizedPath := UpperCase(StringReplace(FilePath, '/', '\', [rfReplaceAll]));
+  for i := 0 to FIgnorePatterns.Count - 1 do
   begin
-    LogMessage('Ignoring .so file not in main build directory: ' + ExtractFileName(FilePath), 4);
+    if Pos(FIgnorePatterns[i], NormalizedPath) > 0 then
+    begin
+      LogMessage('Ignoring file matching pattern ' + FIgnorePatterns[i] + ': ' + ExtractFileName(FilePath), 4);
+      Result := True;
+      Exit;
+    end;
+  end;
+  
+  // Special case for the complex DEBUG + LIBRARY condition
+  if (Pos('\DEBUG\', NormalizedPath) > 0) and (Pos('\LIBRARY\', NormalizedPath) > 0) then
+  begin
+    LogMessage('Ignoring file in DEBUG\LIBRARY path: ' + ExtractFileName(FilePath), 4);
     Result := True;
     Exit;
   end;
@@ -1045,29 +1061,14 @@ begin
   NormalizedPath := UpperCase(StringReplace(FilePath, '/', '\', [rfReplaceAll]));
   ConfigStr := UpperCase(FBuildConfigMapper.GetString(FBuildConfig));
 
-  // Exclude library subdirectories and architecture-specific folders
-  if (Pos('\LIBRARY\', NormalizedPath) > 0) or
-     (Pos('\DEBUG\', NormalizedPath) > 0) and (Pos('\LIBRARY\', NormalizedPath) > 0) or
-     (Pos('\ARM64-V8A\', NormalizedPath) > 0) or
-     (Pos('\ARMEABI\', NormalizedPath) > 0) or
-     (Pos('\ARMEABI-V7A\', NormalizedPath) > 0) or
-     (Pos('\MIPS\', NormalizedPath) > 0) then
-  begin
-    Result := False;
-    Exit;
-  end;
-
   // Only accept .so files that match the pattern: \bin\Android64\Debug\ (or Release)
-  // but NOT in subdirectories like \library\ or \debug\
-  if (Pos('\BIN\ANDROID64\' + ConfigStr + '\', NormalizedPath) > 0) and
-     (Pos('\BIN\ANDROID64\' + ConfigStr + '\' + UpperCase(ExtractFileName(FilePath)), NormalizedPath) > 0) then
+  // The ignore patterns will handle filtering out unwanted subdirectories
+  if (Pos('\BIN\ANDROID64\' + ConfigStr + '\', NormalizedPath) > 0) then
   begin
     Result := True;
-    LogMessage('Accepting main build .so file: ' + FilePath, 4);
+    LogMessage('Accepting build .so file: ' + FilePath, 4);
   end;
 end;
-
-
 
 procedure TAPKMonitorThread.ProcessPendingFiles;
 var
