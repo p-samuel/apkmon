@@ -95,6 +95,7 @@ type
     FLastBuildTime: TDateTime;
     FBuildCooldownSeconds: Integer;
     FIgnorePatterns: TStringList;
+    FProjectLock: TObject;
     procedure InitializeMappers;
     procedure ScanForProjectFiles;
     function FindProjectInfo(const APKPath: string): TProjectInfo;
@@ -118,6 +119,16 @@ type
     constructor Create(const WatchDir: string; ProjectNames: TStringList;
                       BuildConfig: TBuildConfig; DeployAction: TDeployAction);
     destructor Destroy; override;
+    procedure AddProject(const ProjectName: string);
+  end;
+
+  TInputThread = class(TThread)
+  private
+    FMonitorThread: TAPKMonitorThread;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(MonitorThread: TAPKMonitorThread);
   end;
 
 constructor TAPKMonitorThread.Create(const WatchDir: string; ProjectNames: TStringList;
@@ -134,6 +145,7 @@ begin
   FFileStabilityDelay := 3;
   FMaxWaitTime := 6;
   FreeOnTerminate := True;
+  FProjectLock := TObject.Create;
   InitializeMappers;
   ScanForProjectFiles;
   FBuildInProgress := False;
@@ -157,9 +169,103 @@ begin
   FDeployActionMapper.Free;
   FProjectNames.Free;
   FProjectFiles.Free;
-  FPendingFiles.Free;  
+  FPendingFiles.Free;
   FIgnorePatterns.Free;
+  FProjectLock.Free;
   inherited Destroy;
+end;
+
+procedure TAPKMonitorThread.AddProject(const ProjectName: string);
+var
+  ProjectFilesList: TStringList;
+  i: Integer;
+  ProjectFile, ProjName, PackageName: string;
+  ProjectInfo: TProjectInfo;
+begin
+  TMonitor.Enter(FProjectLock);
+  try
+    // Check if already added
+    if FProjectNames.IndexOf(ProjectName) >= 0 then
+    begin
+      LogMessage('Project already being monitored: ' + ProjectName, 3);
+      Exit;
+    end;
+
+    FProjectNames.Add(ProjectName);
+    LogMessage('Added project to monitor list: ' + ProjectName, 1);
+
+    // Scan for the new project file
+    ProjectFilesList := TStringList.Create;
+    try
+      FindFilesRecursive(FWatchDirectory, '.dproj', ProjectFilesList);
+
+      for i := 0 to ProjectFilesList.Count - 1 do
+      begin
+        ProjectFile := ProjectFilesList[i];
+        ProjName := ChangeFileExt(ExtractFileName(ProjectFile), '');
+
+        if SameText(ProjName, ProjectName) then
+        begin
+          PackageName := ExtractPackageNameFromDproj(ProjectFile);
+          ProjectInfo.ProjectFile := ProjectFile;
+          ProjectInfo.PackageName := PackageName;
+          FProjectFiles.AddOrSetValue(LowerCase(ProjName), ProjectInfo);
+
+          if PackageName <> '' then
+            LogMessage(Format('Found project: %s -> %s (Package: %s)', [ProjName, ProjectFile, PackageName]), 1)
+          else
+            LogMessage(Format('Found project: %s -> %s (Package: Not found)', [ProjName, ProjectFile]), 3);
+          Break;
+        end;
+      end;
+    finally
+      ProjectFilesList.Free;
+    end;
+  finally
+    TMonitor.Exit(FProjectLock);
+  end;
+end;
+
+constructor TInputThread.Create(MonitorThread: TAPKMonitorThread);
+begin
+  inherited Create(False);
+  FMonitorThread := MonitorThread;
+  FreeOnTerminate := True;
+end;
+
+procedure TInputThread.Execute;
+var
+  Input: string;
+begin
+  Writeln;
+  Writeln('You can add more projects at any time by typing the project name and pressing Enter.');
+  Writeln('Type "list" to see current projects, "quit" to exit.');
+  Writeln;
+
+  while not Terminated do
+  begin
+    Write('> ');
+    Readln(Input);
+    Input := Trim(Input);
+
+    if Input = '' then
+      Continue;
+
+    if SameText(Input, 'quit') or SameText(Input, 'exit') then
+    begin
+      Writeln('Stopping monitor...');
+      FMonitorThread.Terminate;
+      Break;
+    end;
+
+    if SameText(Input, 'list') then
+    begin
+      Writeln('Current projects: ', FMonitorThread.FProjectNames.CommaText);
+      Continue;
+    end;
+
+    FMonitorThread.AddProject(Input);
+  end;
 end;
 
 procedure TAPKMonitorThread.InitializeMappers;
@@ -1145,15 +1251,55 @@ begin
   end;
 end;
 
+procedure FindDprFilesRecursive(const Directory: string; Files: TStringList);
+var
+  SearchRec: TSearchRec;
+  SearchPath: string;
+begin
+  SearchPath := IncludeTrailingPathDelimiter(Directory);
+
+  // Find .dpr files
+  if FindFirst(SearchPath + '*.dpr', faAnyFile, SearchRec) = 0 then
+  begin
+    try
+      repeat
+        if (SearchRec.Attr and faDirectory) = 0 then
+          Files.Add(SearchPath + SearchRec.Name);
+      until FindNext(SearchRec) <> 0;
+    finally
+      FindClose(SearchRec);
+    end;
+  end;
+
+  // Recursively search subdirectories
+  if FindFirst(SearchPath + '*', faDirectory, SearchRec) = 0 then
+  begin
+    try
+      repeat
+        if ((SearchRec.Attr and faDirectory) <> 0) and
+           (SearchRec.Name <> '.') and (SearchRec.Name <> '..') then
+          FindDprFilesRecursive(SearchPath + SearchRec.Name, Files);
+      until FindNext(SearchRec) <> 0;
+    finally
+      FindClose(SearchRec);
+    end;
+  end;
+end;
+
 // Main program
 var
   WatchDirectory, Input: string;
   ProjectNames: TStringList;
   BuildConfig: TBuildConfig;
   DeployAction: TDeployAction;
-  ConfigChoice, ActionChoice: Integer;
+  ConfigChoice, ActionChoice, ProjectChoice: Integer;
   BuildConfigMapper: TEnumMapper<TBuildConfig>;
   DeployActionMapper: TEnumMapper<TDeployAction>;
+  DprFiles: TStringList;
+  i: Integer;
+  ProjectName: string;
+  MonitorThread: TAPKMonitorThread;
+  InputThread: TInputThread;
 
 begin
   Writeln('=== APK Deploy Monitor ===');
@@ -1185,15 +1331,109 @@ begin
 
       // Get project names
       ProjectNames := TStringList.Create;
+      DprFiles := TStringList.Create;
       try
-        Writeln('Enter project names to match (without .dproj extension), one per line.');
-        Writeln('Leave blank to finish:');
-        repeat
-          Write('Project name: ');
-          Readln(Input);
-          if Input <> '' then
-            ProjectNames.Add(Trim(Input));
-        until Input = '';
+        // Ask how user wants to add projects
+        Writeln;
+        Writeln('How would you like to add projects?');
+        Writeln('1 - Type project names manually');
+        Writeln('2 - Search for .dpr files and select from list');
+        Writeln('3 - Skip (add projects later during monitoring)');
+        Write('Choice (1-3): ');
+        Readln(ProjectChoice);
+
+        case ProjectChoice of
+          1: begin
+            // Original manual entry
+            Writeln;
+            Writeln('Enter project names to match (without .dproj extension), one per line.');
+            Writeln('Leave blank to finish:');
+            repeat
+              Write('Project name: ');
+              Readln(Input);
+              if Input <> '' then
+                ProjectNames.Add(Trim(Input));
+            until Input = '';
+          end;
+
+          2: begin
+            // Search for .dpr files
+            Writeln;
+            Writeln('Searching for .dpr files...');
+            FindDprFilesRecursive(WatchDirectory, DprFiles);
+
+            if DprFiles.Count = 0 then
+            begin
+              Writeln('No .dpr files found in the directory.');
+              Writeln('You can add projects manually later during monitoring.');
+            end
+            else
+            begin
+              Writeln;
+              Writeln('Found ', DprFiles.Count, ' .dpr file(s):');
+              for i := 0 to DprFiles.Count - 1 do
+              begin
+                ProjectName := ChangeFileExt(ExtractFileName(DprFiles[i]), '');
+                Writeln(Format('  %d - %s', [i + 1, ProjectName]));
+                Writeln(Format('      (%s)', [DprFiles[i]]));
+              end;
+
+              Writeln;
+              Writeln('Options:');
+              Writeln('  A - Add all projects');
+              Writeln('  Enter numbers separated by commas (e.g., 1,3,5)');
+              Writeln('  Leave blank to skip');
+              Write('Selection: ');
+              Readln(Input);
+              Input := Trim(Input);
+
+              if SameText(Input, 'A') then
+              begin
+                // Add all projects
+                for i := 0 to DprFiles.Count - 1 do
+                begin
+                  ProjectName := ChangeFileExt(ExtractFileName(DprFiles[i]), '');
+                  ProjectNames.Add(ProjectName);
+                end;
+                Writeln('Added all ', ProjectNames.Count, ' projects.');
+              end
+              else if Input <> '' then
+              begin
+                // Parse comma-separated numbers
+                while Input <> '' do
+                begin
+                  i := Pos(',', Input);
+                  if i > 0 then
+                  begin
+                    ProjectChoice := StrToIntDef(Trim(Copy(Input, 1, i - 1)), 0);
+                    Input := Copy(Input, i + 1, Length(Input));
+                  end
+                  else
+                  begin
+                    ProjectChoice := StrToIntDef(Trim(Input), 0);
+                    Input := '';
+                  end;
+
+                  if (ProjectChoice >= 1) and (ProjectChoice <= DprFiles.Count) then
+                  begin
+                    ProjectName := ChangeFileExt(ExtractFileName(DprFiles[ProjectChoice - 1]), '');
+                    if ProjectNames.IndexOf(ProjectName) < 0 then
+                      ProjectNames.Add(ProjectName);
+                  end;
+                end;
+                Writeln('Added ', ProjectNames.Count, ' project(s).');
+              end;
+            end;
+          end;
+
+          3: begin
+            Writeln;
+            Writeln('No projects added. You can add them during monitoring.');
+          end;
+        else
+          Writeln;
+          Writeln('Invalid choice. You can add projects during monitoring.');
+        end;
 
         if ProjectNames.Count = 0 then
         begin
@@ -1201,9 +1441,10 @@ begin
         end
         else
         begin
+          Writeln;
           Writeln('Project names to match:');
-          for Input in ProjectNames do
-            Writeln('  - ', Input);
+          for i := 0 to ProjectNames.Count - 1 do
+            Writeln('  - ', ProjectNames[i]);
         end;
 
         // Get build configuration
@@ -1249,20 +1490,18 @@ begin
         Writeln('  Monitoring: .so files only (to avoid infinite loops)');
         Writeln;
 
-        // Start monitoring
-        TAPKMonitorThread.Create(WatchDirectory, ProjectNames, BuildConfig, DeployAction);
+        // Start monitoring thread
+        MonitorThread := TAPKMonitorThread.Create(WatchDirectory, ProjectNames, BuildConfig, DeployAction);
 
-        Writeln('Press Ctrl+C to stop monitoring...');
+        // Start input thread for adding projects during monitoring
+        InputThread := TInputThread.Create(MonitorThread);
 
-        try
-          while True do
-            Sleep(1000);
-        except
-          on E: Exception do
-            Writeln('Error: ', E.Message);
-        end;
+        // Wait for input thread to finish (user typed 'quit')
+        while not MonitorThread.Terminated do
+          Sleep(100);
 
       finally
+        DprFiles.Free;
         ProjectNames.Free;
       end;
 
