@@ -105,6 +105,7 @@ type
     procedure DeployAPK(const APKPath: string);
     function BuildProject(const ProjectFile: string; const Platform: TTargetPlatform): Boolean;
     function GetEmulator(const TargetABI: string = ''): string;
+    function GetMatchingDevices(const TargetABI: string = ''): TStringList;
     function ExecuteCommand(const Command: string; ShowOutput: Boolean = True): Boolean;
     function GetCommandOutput(const Command: string): string;
     function GetDeviceABI(const DeviceId: string): string;
@@ -772,6 +773,71 @@ begin
     LogMessage('Unable to read device ABI information', 3);
 end;
 
+function TAPKMonitorThread.GetMatchingDevices(const TargetABI: string = ''): TStringList;
+var
+  Output: string;
+  Lines: TStringList;
+  i: Integer;
+  Line, DeviceId, State, Abis: string;
+begin
+  Result := TStringList.Create;
+
+  Output := GetCommandOutput('adb devices');
+
+  if Trim(Output) = '' then
+  begin
+    LogMessage('No devices found via adb', 3);
+    Exit;
+  end;
+
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Output;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Line := Trim(Lines[i]);
+
+      // Skip header or empty lines
+      if (Line = '') or (Pos('list of devices', LowerCase(Line)) = 1) then
+        Continue;
+
+      // Extract device id and state
+      DeviceId := Trim(Copy(Line, 1, Pos(#9, Line + #9) - 1));
+      if DeviceId = '' then
+        DeviceId := Trim(Copy(Line, 1, Pos(' ', Line + ' ') - 1));
+
+      State := Trim(StringReplace(Line, DeviceId, '', []));
+      State := Trim(StringReplace(State, #9, ' ', [rfReplaceAll]));
+
+      // Accept only "device" state (skip offline/unauthorized)
+      if (DeviceId = '') or (Pos('device', LowerCase(State)) = 0) then
+        Continue;
+
+      if TargetABI <> '' then
+      begin
+        Abis := GetDeviceABI(DeviceId);
+        if (Abis <> '') and IsABICompatible(TargetABI, Abis) then
+        begin
+          Result.Add(DeviceId);
+          LogMessage(Format('Device %s selected (ABI match: %s)', [DeviceId, Abis]), 4);
+        end
+        else if Abis <> '' then
+          LogMessage(Format('Skipping device %s due to ABI mismatch (%s)', [DeviceId, Abis]), 3);
+      end
+      else
+      begin
+        Result.Add(DeviceId);
+        LogMessage('Device ' + DeviceId + ' added (no ABI filter)', 4);
+      end;
+    end;
+
+    if Result.Count = 0 then
+      LogMessage('No devices matched the required ABI. Start an ARM-compatible device/emulator.', 2);
+  finally
+    Lines.Free;
+  end;
+end;
+
 function TAPKMonitorThread.BuildProject(const ProjectFile: string; const Platform: TTargetPlatform): Boolean;
 var
   Command: string;
@@ -799,11 +865,13 @@ end;
 
 procedure TAPKMonitorThread.DeployAPK(const APKPath: string);
 var
-  Emulator, Command: string;
+  Command: string;
   ProjectInfo: TProjectInfo;
   ActualAPKPath: string;
   TargetABI, DeviceABIList: string;
   TargetPlatform: TTargetPlatform;
+  Devices: TStringList;
+  DeviceId: string;
 begin
   LogMessage('Shared library change detected: ' + ExtractFileName(APKPath), 1);
 
@@ -856,63 +924,66 @@ begin
     if TargetABI <> '' then
       LogMessage('Target ABI: ' + TargetABI, 4);
 
-    LogMessage('Getting emulator...', 4);
-    Emulator := GetEmulator(TargetABI);
-
-    if Emulator = '' then
-    begin
-      LogMessage('No emulator found! Please start an emulator.', 2);
-      Exit;
-    end;
-
-    LogMessage('Using emulator: ' + Emulator, 4);
-
-    DeviceABIList := GetDeviceABI(Emulator);
-
-    if (TargetABI <> '') and (DeviceABIList <> '') then
-    begin
-      if not IsABICompatible(TargetABI, DeviceABIList) then
+    LogMessage('Detecting compatible devices...', 4);
+    Devices := GetMatchingDevices(TargetABI);
+    try
+      if Devices.Count = 0 then
       begin
-        LogMessage(Format('APK ABI %s is not compatible with emulator ABIs %s. Start an ARM64 emulator or rebuild for a matching ABI.', [TargetABI, DeviceABIList]), 2);
+        LogMessage('No compatible devices found for deployment.', 2);
         Exit;
       end;
-    end
-    else
-      LogMessage('Could not determine ABI compatibility, attempting installation anyway', 3);
 
-    // Clear app data if package name is available
-    if ProjectInfo.PackageName <> '' then
-    begin
-      LogMessage('Clearing app data for: ' + ProjectInfo.PackageName, 4);
-      Command := Format('adb -s %s shell pm clear %s', [Emulator, ProjectInfo.PackageName]);
-      ExecuteCommand(Command, False);
-    end
-    else
-    begin
-      LogMessage('No package name found - skipping app data clear', 3);
-    end;
+      LogMessage(Format('Deploying to %d device(s)...', [Devices.Count]), 4);
 
-    LogMessage('Installing APK...', 3);
-    Command := Format('adb -s %s install -r "%s"', [Emulator, ActualAPKPath]);
-    if ExecuteCommand(Command) then
-    begin
-      LogMessage('APK installed successfully', 1);
-
-      // Start the app if package name is available
-      if ProjectInfo.PackageName <> '' then
+      for DeviceId in Devices do
       begin
-        LogMessage('Starting application: ' + ProjectInfo.PackageName, 4);
-        Command := Format('adb -s %s shell am start -n %s/com.embarcadero.firemonkey.FMXNativeActivity',
-                         [Emulator, ProjectInfo.PackageName]);
-        ExecuteCommand(Command, False);
-      end
-      else
-      begin
-        LogMessage('No package name found - skipping app start', 3);
+        DeviceABIList := GetDeviceABI(DeviceId);
+
+        if (TargetABI <> '') and (DeviceABIList <> '') and (not IsABICompatible(TargetABI, DeviceABIList)) then
+        begin
+          LogMessage(Format('Skipping device %s: APK ABI %s not compatible with device ABIs %s.', [DeviceId, TargetABI, DeviceABIList]), 3);
+          Continue;
+        end;
+
+        LogMessage('Using device: ' + DeviceId, 4);
+
+        // Clear app data if package name is available
+        if ProjectInfo.PackageName <> '' then
+        begin
+          LogMessage('Clearing app data for: ' + ProjectInfo.PackageName, 4);
+          Command := Format('adb -s %s shell pm clear %s', [DeviceId, ProjectInfo.PackageName]);
+          ExecuteCommand(Command, False);
+        end
+        else
+        begin
+          LogMessage('No package name found - skipping app data clear', 3);
+        end;
+
+        LogMessage('Installing APK...', 3);
+        Command := Format('adb -s %s install -r "%s"', [DeviceId, ActualAPKPath]);
+        if ExecuteCommand(Command) then
+        begin
+          LogMessage(Format('APK installed successfully on %s', [DeviceId]), 1);
+
+          // Start the app if package name is available
+          if ProjectInfo.PackageName <> '' then
+          begin
+            LogMessage('Starting application: ' + ProjectInfo.PackageName, 4);
+            Command := Format('adb -s %s shell am start -n %s/com.embarcadero.firemonkey.FMXNativeActivity',
+                             [DeviceId, ProjectInfo.PackageName]);
+            ExecuteCommand(Command, False);
+          end
+          else
+          begin
+            LogMessage('No package name found - skipping app start', 3);
+          end;
+        end
+        else
+          LogMessage(Format('APK installation failed on %s', [DeviceId]), 2);
       end;
-    end
-    else
-      LogMessage('APK installation failed!', 2);
+    finally
+      Devices.Free;
+    end;
   end;
 end;
 
