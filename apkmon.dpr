@@ -8,6 +8,7 @@ uses
 type
   TBuildConfig = (bcDebug, bcRelease);
   TDeployAction = (daBuild, daDeploy, daBuildAndDeploy);
+  TTargetPlatform = (tpAndroid32, tpAndroid64);
 
   // Generic helper class for conditional value selection
   TConditionalHelper<T> = class
@@ -102,13 +103,19 @@ type
     function ExtractProjectNameFromAPK(const APKPath: string): string;
     function ExtractPackageNameFromDproj(const ProjectFile: string): string;
     procedure DeployAPK(const APKPath: string);
-    function BuildProject(const ProjectFile: string): Boolean;
-    function GetEmulator: string;
+    function BuildProject(const ProjectFile: string; const Platform: TTargetPlatform): Boolean;
+    function GetEmulator(const TargetABI: string = ''): string;
     function ExecuteCommand(const Command: string; ShowOutput: Boolean = True): Boolean;
+    function GetCommandOutput(const Command: string): string;
+    function GetDeviceABI(const DeviceId: string): string;
     procedure LogMessage(const Msg: string; Color: Integer = 0);
     procedure FindFilesRecursive(const Directory, Extension: string; Files: TStringList);
-    function FindAPKFile(const DetectedFilePath: string; const ProjectInfo: TProjectInfo): string;
+    function FindAPKFile(const DetectedFilePath: string; const ProjectInfo: TProjectInfo;
+                         const Platform: TTargetPlatform): string;
     function FindAPKRecursively(const StartDirectory: string): string;
+    function DetermineTargetABI(const APKPath: string; const Platform: TTargetPlatform): string;
+    function IsABICompatible(const TargetAbi, DeviceAbiList: string): Boolean;
+    function DeterminePlatformFromPath(const FilePath: string): TTargetPlatform;
     function IsFileStable(const FilePath: string): Boolean;
     procedure ProcessPendingFiles;
     function ShouldIgnoreFile(const FilePath: string): Boolean;
@@ -626,7 +633,7 @@ begin
   end;
 end;
 
-function TAPKMonitorThread.GetEmulator: string;
+function TAPKMonitorThread.GetCommandOutput(const Command: string): string;
 var
   StartupInfo: TStartupInfo;
   ProcessInfo: TProcessInformation;
@@ -634,9 +641,6 @@ var
   SecurityAttr: TSecurityAttributes;
   Buffer: array[0..4095] of AnsiChar;
   BytesRead: DWORD;
-  Output: string;
-  Lines: TStringList;
-  i: Integer;
   CommandLine: string;
   CommandBuffer: array[0..511] of Char;
 begin
@@ -657,8 +661,7 @@ begin
     StartupInfo.hStdError := WritePipe;
     StartupInfo.wShowWindow := SW_HIDE;
 
-    // Use a mutable buffer for the command line
-    CommandLine := 'cmd.exe /C "adb devices | findstr /i emulator"';
+    CommandLine := 'cmd.exe /C "' + Command + '"';
     StrPCopy(CommandBuffer, CommandLine);
 
     if CreateProcess(nil, CommandBuffer, nil, nil, True, 0, nil, nil, StartupInfo, ProcessInfo) then
@@ -667,42 +670,18 @@ begin
         CloseHandle(WritePipe);
         WritePipe := 0;
 
-        // Wait with timeout to prevent hanging
         if WaitForSingleObject(ProcessInfo.hProcess, 10000) = WAIT_OBJECT_0 then
         begin
-          if ReadFile(ReadPipe, Buffer, SizeOf(Buffer) - 1, BytesRead, nil) then
+          if ReadFile(ReadPipe, Buffer, SizeOf(Buffer) - 1, BytesRead, nil) and (BytesRead > 0) then
           begin
             Buffer[BytesRead] := #0;
-            Output := string(Buffer);
-
-            if Output <> '' then
-            begin
-              Lines := TStringList.Create;
-              try
-                Lines.Text := Output;
-                for i := 0 to Lines.Count - 1 do
-                begin
-                  if (Trim(Lines[i]) <> '') and (Pos('emulator', LowerCase(Lines[i])) > 0) then
-                  begin
-                    // Extract just the emulator name (first token)
-                    Result := Trim(Copy(Lines[i], 1, Pos(#9, Lines[i] + #9) - 1));
-                    if Result = '' then
-                      Result := Trim(Copy(Lines[i], 1, Pos(' ', Lines[i] + ' ') - 1));
-                    LogMessage('Found emulator: ' + Result, 4);
-                    Break;
-                  end;
-                end;
-              finally
-                Lines.Free;
-              end;
-            end;
+            Result := Trim(string(Buffer));
           end;
         end
         else
         begin
-          // Timeout occurred, terminate the process
           TerminateProcess(ProcessInfo.hProcess, 1);
-          LogMessage('Timeout waiting for adb devices command', 2);
+          LogMessage('Timeout waiting for command: ' + Command, 2);
         end;
       finally
         CloseHandle(ProcessInfo.hProcess);
@@ -710,25 +689,102 @@ begin
       end;
     end
     else
-    begin
-      LogMessage('Failed to create process for adb devices command', 2);
-    end;
+      LogMessage('Failed to create process for command output: ' + Command, 2);
   finally
     if WritePipe <> 0 then CloseHandle(WritePipe);
     CloseHandle(ReadPipe);
   end;
 end;
 
-function TAPKMonitorThread.BuildProject(const ProjectFile: string): Boolean;
+function TAPKMonitorThread.GetEmulator(const TargetABI: string = ''): string;
+var
+  Output: string;
+  Lines: TStringList;
+  i: Integer;
+  Line, DeviceId, Abis: string;
+begin
+  Result := '';
+
+  Output := GetCommandOutput('adb devices');
+
+  if Trim(Output) = '' then
+    Exit;
+
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Output;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Line := Trim(Lines[i]);
+
+      // Skip header or empty lines
+      if (Line = '') or (Pos('list of devices', LowerCase(Line)) = 1) then
+        Continue;
+
+      if Pos('emulator', LowerCase(Line)) > 0 then
+      begin
+        // Extract the device id (first token)
+        DeviceId := Trim(Copy(Line, 1, Pos(#9, Line + #9) - 1));
+        if DeviceId = '' then
+          DeviceId := Trim(Copy(Line, 1, Pos(' ', Line + ' ') - 1));
+
+        if DeviceId = '' then
+          Continue;
+
+        if TargetABI <> '' then
+        begin
+          Abis := GetDeviceABI(DeviceId);
+          if (Abis <> '') and IsABICompatible(TargetABI, Abis) then
+          begin
+            Result := DeviceId;
+            LogMessage(Format('Selected emulator %s (ABI match: %s)', [Result, Abis]), 4);
+            Exit;
+          end
+          else if Abis <> '' then
+            LogMessage(Format('Skipping emulator %s due to ABI mismatch (%s)', [DeviceId, Abis]), 3);
+        end;
+
+        // Fallback to the first emulator if no ABI match is found
+        if Result = '' then
+          Result := DeviceId;
+      end;
+    end;
+
+    if (Result <> '') and (TargetABI <> '') then
+      LogMessage('No emulator ABI matched, using first available: ' + Result, 3)
+    else if Result <> '' then
+      LogMessage('Found emulator: ' + Result, 4);
+  finally
+    Lines.Free;
+  end;
+end;
+
+function TAPKMonitorThread.GetDeviceABI(const DeviceId: string): string;
+begin
+  Result := Trim(GetCommandOutput(Format('adb -s %s shell getprop ro.product.cpu.abilist', [DeviceId])));
+
+  if Result = '' then
+    Result := Trim(GetCommandOutput(Format('adb -s %s shell getprop ro.product.cpu.abi', [DeviceId])));
+
+  if Result <> '' then
+    LogMessage(Format('Device %s ABI list: %s', [DeviceId, Result]), 4)
+  else
+    LogMessage('Unable to read device ABI information', 3);
+end;
+
+function TAPKMonitorThread.BuildProject(const ProjectFile: string; const Platform: TTargetPlatform): Boolean;
 var
   Command: string;
+  PlatformStr: string;
 begin
   FBuildInProgress := True;
   try
-    Command := Format('msbuild "%s" /p:Config=%s /target:Deploy /p:platform=Android64',
-                     [ProjectFile, FBuildConfigMapper.GetString(FBuildConfig)]);
+    PlatformStr := TConditionalHelper<string>.IfThen(Platform = tpAndroid64, 'Android64', 'Android');
 
-    LogMessage('Building and deploying project: ' + ExtractFileName(ProjectFile), 3);
+    Command := Format('msbuild "%s" /p:Config=%s /target:Deploy /p:platform=%s',
+                     [ProjectFile, FBuildConfigMapper.GetString(FBuildConfig), PlatformStr]);
+
+    LogMessage(Format('Building (%s) and deploying project: %s', [PlatformStr, ExtractFileName(ProjectFile)]), 3);
     Result := ExecuteCommand(Command);
 
     if Result then
@@ -746,18 +802,24 @@ var
   Emulator, Command: string;
   ProjectInfo: TProjectInfo;
   ActualAPKPath: string;
+  TargetABI, DeviceABIList: string;
+  TargetPlatform: TTargetPlatform;
 begin
   LogMessage('Shared library change detected: ' + ExtractFileName(APKPath), 1);
 
   // Get project info (includes package name)
   ProjectInfo := FindProjectInfo(APKPath);
 
+  TargetPlatform := DeterminePlatformFromPath(APKPath);
+  LogMessage('Detected target platform: ' +
+    TConditionalHelper<string>.IfThen(TargetPlatform = tpAndroid64, 'Android64', 'Android'), 4);
+
   // Build project if needed
   if FDeployAction in [daBuild, daBuildAndDeploy] then
   begin
     if ProjectInfo.ProjectFile <> '' then
     begin
-      if not BuildProject(ProjectInfo.ProjectFile) then
+      if not BuildProject(ProjectInfo.ProjectFile, TargetPlatform) then
       begin
         LogMessage('Skipping deployment due to build failure', 2);
         Exit;
@@ -775,7 +837,7 @@ begin
   if FDeployAction in [daDeploy, daBuildAndDeploy] then
   begin
     // Find the actual APK file to install
-    ActualAPKPath := FindAPKFile(APKPath, ProjectInfo);
+    ActualAPKPath := FindAPKFile(APKPath, ProjectInfo, TargetPlatform);
 
     if ActualAPKPath = '' then
     begin
@@ -783,9 +845,19 @@ begin
       Exit;
     end;
 
+    // Re-evaluate platform based on the actual APK path (in case heuristics differ)
+    TargetPlatform := DeterminePlatformFromPath(ActualAPKPath);
+    LogMessage('Detected target platform from APK path: ' +
+      TConditionalHelper<string>.IfThen(TargetPlatform = tpAndroid64, 'Android64', 'Android'), 4);
+
     LogMessage('APK to install: ' + ExtractFileName(ActualAPKPath), 1);
+    TargetABI := DetermineTargetABI(ActualAPKPath, TargetPlatform);
+
+    if TargetABI <> '' then
+      LogMessage('Target ABI: ' + TargetABI, 4);
+
     LogMessage('Getting emulator...', 4);
-    Emulator := GetEmulator;
+    Emulator := GetEmulator(TargetABI);
 
     if Emulator = '' then
     begin
@@ -794,6 +866,19 @@ begin
     end;
 
     LogMessage('Using emulator: ' + Emulator, 4);
+
+    DeviceABIList := GetDeviceABI(Emulator);
+
+    if (TargetABI <> '') and (DeviceABIList <> '') then
+    begin
+      if not IsABICompatible(TargetABI, DeviceABIList) then
+      begin
+        LogMessage(Format('APK ABI %s is not compatible with emulator ABIs %s. Start an ARM64 emulator or rebuild for a matching ABI.', [TargetABI, DeviceABIList]), 2);
+        Exit;
+      end;
+    end
+    else
+      LogMessage('Could not determine ABI compatibility, attempting installation anyway', 3);
 
     // Clear app data if package name is available
     if ProjectInfo.PackageName <> '' then
@@ -935,13 +1020,14 @@ begin
   end;
 end;
 
-function TAPKMonitorThread.FindAPKFile(const DetectedFilePath: string; const ProjectInfo: TProjectInfo): string;
+function TAPKMonitorThread.FindAPKFile(const DetectedFilePath: string; const ProjectInfo: TProjectInfo;
+                         const Platform: TTargetPlatform): string;
 var
   ProjectName: string;
   APKSearchPaths: TStringList;
   i: Integer;
   SearchPath, APKFileName: string;
-  ConfigStr: string;
+  ConfigStr, PlatformStr: string;
 begin
   Result := '';
 
@@ -958,14 +1044,15 @@ begin
   begin
     ProjectName := ChangeFileExt(ExtractFileName(ProjectInfo.ProjectFile), '');
     ConfigStr := FBuildConfigMapper.GetString(FBuildConfig);
+    PlatformStr := TConditionalHelper<string>.IfThen(Platform = tpAndroid64, 'Android64', 'Android');
 
     APKSearchPaths := TStringList.Create;
     try
       // Common APK locations relative to project file
-      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('bin\Android64\%s\%s\bin\%s.apk', [ConfigStr, ProjectName, ProjectName]));
-      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('bin\Android64\%s\bin\%s.apk', [ConfigStr, ProjectName]));
-      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('bin\Android64\%s\%s.apk', [ConfigStr, ProjectName]));
-      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('Android64\%s\%s.apk', [ConfigStr, ProjectName]));
+      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('bin\%s\%s\%s\bin\%s.apk', [PlatformStr, ConfigStr, ProjectName, ProjectName]));
+      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('bin\%s\%s\bin\%s.apk', [PlatformStr, ConfigStr, ProjectName]));
+      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('bin\%s\%s\%s.apk', [PlatformStr, ConfigStr, ProjectName]));
+      APKSearchPaths.Add(ExtractFilePath(ProjectInfo.ProjectFile) + Format('%s\%s\%s.apk', [PlatformStr, ConfigStr, ProjectName]));
 
       // Search in the same directory as the detected file
       SearchPath := ExtractFilePath(DetectedFilePath);
@@ -1001,6 +1088,52 @@ begin
     LogMessage('Searching for APK files recursively...', 4);
     Result := FindAPKRecursively(ExtractFilePath(DetectedFilePath));
   end;
+end;
+
+function TAPKMonitorThread.DetermineTargetABI(const APKPath: string; const Platform: TTargetPlatform): string;
+var
+  UpperPath: string;
+begin
+  UpperPath := UpperCase(StringReplace(APKPath, '/', '\', [rfReplaceAll]));
+
+  // Prefer explicit platform hint
+  if Platform = tpAndroid64 then
+    Exit('arm64-v8a')
+  else if Platform = tpAndroid32 then
+    Exit('armeabi-v7a');
+
+  if Pos('\ANDROID64\', UpperPath) > 0 then
+    Result := 'arm64-v8a'
+  else if Pos('\ANDROID\', UpperPath) > 0 then
+    Result := 'armeabi-v7a'
+  else
+    Result := 'arm64-v8a'; // Default for current Android64 deployments
+end;
+
+function TAPKMonitorThread.DeterminePlatformFromPath(const FilePath: string): TTargetPlatform;
+var
+  UpperPath: string;
+begin
+  UpperPath := UpperCase(StringReplace(FilePath, '/', '\', [rfReplaceAll]));
+
+  if Pos('\ANDROID64\', UpperPath) > 0 then
+    Result := tpAndroid64
+  else if Pos('\ANDROID 64', UpperPath) > 0 then
+    Result := tpAndroid64
+  else if (Pos('\ANDROID\', UpperPath) > 0) or (Pos('\ANDROID32\', UpperPath) > 0) then
+    Result := tpAndroid32
+  else
+    Result := tpAndroid64; // Default to 64-bit if unclear
+end;
+
+function TAPKMonitorThread.IsABICompatible(const TargetAbi, DeviceAbiList: string): Boolean;
+var
+  TargetLower, DeviceLower: string;
+begin
+  TargetLower := LowerCase(TargetAbi);
+  DeviceLower := LowerCase(DeviceAbiList);
+
+  Result := Pos(TargetLower, DeviceLower) > 0;
 end;
 
 function TAPKMonitorThread.FindAPKRecursively(const StartDirectory: string): string;

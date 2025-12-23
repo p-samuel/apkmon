@@ -1,4 +1,4 @@
-# 👾apkmon - Delphi to Android APK Deploymentf
+# 👾apkmon - Delphi to Android APK Deployment
 
 A Windows console application that monitors directories for Android shared library (.so) file changes and automatically builds/deploys APK files to Android emulators.
 
@@ -36,13 +36,6 @@ Add these environment variables to your user or system variables:
 
 This ensures that MSBuild, adb, and other tools are accessible via the terminal.
 
-## How It Works
+## Notice
 
-1. Scans for `.dproj` files matching your project names
-2. Extracts package names from project files or AndroidManifest.template.xml
-3. Monitors for `.so` file changes using Windows directory change notifications
-4. Waits for file stability before processing
-5. Builds project using MSBuild (if configured)
-6. Finds corresponding APK file
-7. Clears app data and installs APK to emulator
-8. Starts the application
+Delphi FMX ships only ARM/ARM64 libs, so x86/x86_64 emulators won’t run it. Keep an ARM/ARM64 emulator (Google APIs ARM image) or a physical ARM device running and let apkmon target that.
