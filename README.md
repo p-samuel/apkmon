@@ -7,9 +7,9 @@ A Windows console application that monitors directories for Android shared libra
 ## Notes
 
 - Only monitors `.so` files to avoid infinite deployment loops. If this happens, maybe your project is rebuilding itself, or something else is causing the .so files to be created consecutively. It should only build when the .so files flag `FILE_ACTION_ADDED` is detected.
-- For the first build, you need to build the project manually via `Project > Deployment > Deploy`, so Delphi can insert set `Deploy` options in the `.dproj` file.
+- On the first time, you need to build the project manually via `Project > Deployment > Deploy`, so Delphi can insert set `Deploy` options in the `.dproj` file.
 - Automatically detects Android emulators using `adb devices`
-- Supports multiple project monitoring simultaneously
+- Supports multiple project monitoring simultaneously and multiple devices deployment (physical/emulator)
 
 ## Setup
 
@@ -38,4 +38,6 @@ This ensures that MSBuild, adb, and other tools are accessible via the terminal.
 
 ## Notice
 
-Delphi FMX ships only ARM/ARM64 libs, so x86/x86_64 emulators won’t run it. Keep an ARM/ARM64 emulator (Google APIs ARM image) or a physical ARM device running and let apkmon target that.
+Delphi FMX ships only ARM/ARM64 libs, so x86/x86_64 devices won’t run it. However, for emulators, both ARM/ARM64 or x86_64 are supported. Keep an ARM/x86_64 emulator (Google APIs ARM image) or a physical ARM device running and let apkmon target that.
+
+![alt text](img/arch.png)
