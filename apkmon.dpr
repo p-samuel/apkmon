@@ -97,6 +97,7 @@ type
     FBuildCooldownSeconds: Integer;
     FIgnorePatterns: TStringList;
     FProjectLock: TObject;
+    FPaused: Boolean;
     procedure InitializeMappers;
     procedure ScanForProjectFiles;
     function FindProjectInfo(const APKPath: string): TProjectInfo;
@@ -128,6 +129,10 @@ type
                       BuildConfig: TBuildConfig; DeployAction: TDeployAction);
     destructor Destroy; override;
     procedure AddProject(const ProjectName: string);
+    procedure ExecuteActionOnProject(const ProjectName: string; Action: TDeployAction);
+    procedure Pause;
+    procedure Resume;
+    function IsPaused: Boolean;
   end;
 
   TInputThread = class(TThread)
@@ -169,6 +174,7 @@ begin
   FIgnorePatterns.Add('\library\mips\');
   FIgnorePatterns.Add('\__history\');
   FIgnorePatterns.Add('\__recovery\');
+  FPaused := False;
 end;
 
 destructor TAPKMonitorThread.Destroy;
@@ -234,6 +240,138 @@ begin
   end;
 end;
 
+procedure TAPKMonitorThread.ExecuteActionOnProject(const ProjectName: string; Action: TDeployAction);
+var
+  ProjectInfo: TProjectInfo;
+  Platform: TTargetPlatform;
+  APKPath, TargetABI, Command, DeviceABIList: string;
+  Devices: TStringList;
+  DeviceId: string;
+begin
+  TMonitor.Enter(FProjectLock);
+  try
+    if not FProjectFiles.TryGetValue(LowerCase(ProjectName), ProjectInfo) then
+    begin
+      LogMessage('Project not found: ' + ProjectName, 2);
+      Exit;
+    end;
+  finally
+    TMonitor.Exit(FProjectLock);
+  end;
+
+  Platform := tpAndroid64; // Default platform
+  LogMessage(Format('Executing %s on project: %s', [FDeployActionMapper.GetString(Action), ProjectName]), 1);
+
+  // Build if needed
+  if Action in [daBuild, daBuildAndDeploy] then
+  begin
+    if ProjectInfo.ProjectFile <> '' then
+    begin
+      if not BuildProject(ProjectInfo.ProjectFile, Platform) then
+      begin
+        LogMessage('Build failed for: ' + ProjectName, 2);
+        if Action = daBuild then
+          Exit;
+      end;
+    end
+    else
+    begin
+      LogMessage('No project file found for: ' + ProjectName, 2);
+      if Action = daBuild then
+        Exit;
+    end;
+  end;
+
+  // Deploy if needed
+  if Action in [daDeploy, daBuildAndDeploy] then
+  begin
+    APKPath := FindAPKFile('', ProjectInfo, Platform);
+    if APKPath = '' then
+    begin
+      LogMessage('Could not find APK for: ' + ProjectName, 2);
+      Exit;
+    end;
+
+    LogMessage('APK to install: ' + ExtractFileName(APKPath), 1);
+    TargetABI := DetermineTargetABI(APKPath, Platform);
+
+    if TargetABI <> '' then
+      LogMessage('Target ABI: ' + TargetABI, 4);
+
+    LogMessage('Detecting compatible devices...', 4);
+    Devices := GetMatchingDevices(TargetABI);
+    try
+      if Devices.Count = 0 then
+      begin
+        LogMessage('No compatible devices found for deployment.', 2);
+        Exit;
+      end;
+
+      LogMessage(Format('Deploying to %d device(s)...', [Devices.Count]), 4);
+
+      for DeviceId in Devices do
+      begin
+        DeviceABIList := GetDeviceABI(DeviceId);
+
+        if (TargetABI <> '') and (DeviceABIList <> '') and (not IsABICompatible(TargetABI, DeviceABIList)) then
+        begin
+          LogMessage(Format('Skipping device %s: APK ABI %s not compatible with device ABIs %s.', [DeviceId, TargetABI, DeviceABIList]), 3);
+          Continue;
+        end;
+
+        LogMessage('Using device: ' + DeviceId, 4);
+
+        // Clear app data if package name is available
+        if ProjectInfo.PackageName <> '' then
+        begin
+          LogMessage('Clearing app data for: ' + ProjectInfo.PackageName, 4);
+          Command := Format('adb -s %s shell pm clear %s', [DeviceId, ProjectInfo.PackageName]);
+          ExecuteCommand(Command, False);
+        end;
+
+        LogMessage('Installing APK...', 3);
+        Command := Format('adb -s %s install -r "%s"', [DeviceId, APKPath]);
+        if ExecuteCommand(Command) then
+        begin
+          LogMessage(Format('APK installed successfully on %s', [DeviceId]), 1);
+
+          // Start the app if package name is available
+          if ProjectInfo.PackageName <> '' then
+          begin
+            LogMessage('Starting application: ' + ProjectInfo.PackageName, 4);
+            Command := Format('adb -s %s shell am start -n %s/com.embarcadero.firemonkey.FMXNativeActivity',
+                             [DeviceId, ProjectInfo.PackageName]);
+            ExecuteCommand(Command, False);
+          end;
+        end
+        else
+          LogMessage(Format('APK installation failed on %s', [DeviceId]), 2);
+      end;
+    finally
+      Devices.Free;
+    end;
+  end;
+end;
+
+procedure TAPKMonitorThread.Pause;
+begin
+  FPaused := True;
+  LogMessage('Auto-detection paused', 3);
+end;
+
+procedure TAPKMonitorThread.Resume;
+begin
+  FPaused := False;
+  // Clear any pending files that accumulated while paused
+  FPendingFiles.Clear;
+  LogMessage('Auto-detection resumed', 1);
+end;
+
+function TAPKMonitorThread.IsPaused: Boolean;
+begin
+  Result := FPaused;
+end;
+
 constructor TInputThread.Create(MonitorThread: TAPKMonitorThread);
 begin
   inherited Create(False);
@@ -241,13 +379,27 @@ begin
   FreeOnTerminate := True;
 end;
 
+function StartsText(const ASubText, AText: string): Boolean;
+begin
+  Result := (Length(ASubText) <= Length(AText)) and
+            SameText(Copy(AText, 1, Length(ASubText)), ASubText);
+end;
+
 procedure TInputThread.Execute;
 var
-  Input: string;
+  Input, Param, ProjName: string;
+  i: Integer;
 begin
   Writeln;
-  Writeln('You can add more projects at any time by typing the project name and pressing Enter.');
-  Writeln('Type "list" to see current projects, "quit" to exit.');
+  Writeln('Commands:');
+  Writeln('  list                - Show current projects');
+  Writeln('  build all|<name>    - Build all or specific project');
+  Writeln('  deploy all|<name>   - Deploy all or specific project');
+  Writeln('  bd all|<name>       - Build and deploy all or specific project');
+  Writeln('  pause               - Pause auto-detection');
+  Writeln('  resume              - Resume auto-detection');
+  Writeln('  <projectname>       - Add a new project to monitor');
+  Writeln('  quit                - Exit');
   Writeln;
 
   while not Terminated do
@@ -269,9 +421,103 @@ begin
     if SameText(Input, 'list') then
     begin
       Writeln('Current projects: ', FMonitorThread.FProjectNames.CommaText);
+      if FMonitorThread.IsPaused then
+        Writeln('Auto-detection: PAUSED')
+      else
+        Writeln('Auto-detection: Active');
       Continue;
     end;
 
+    if SameText(Input, 'help') then
+    begin
+      Writeln('Commands:');
+      Writeln('  list                - Show current projects');
+      Writeln('  build all|<name>    - Build all or specific project');
+      Writeln('  deploy all|<name>   - Deploy all or specific project');
+      Writeln('  bd all|<name>       - Build and deploy all or specific project');
+      Writeln('  pause               - Pause auto-detection');
+      Writeln('  resume              - Resume auto-detection');
+      Writeln('  <projectname>       - Add a new project to monitor');
+      Writeln('  quit                - Exit');
+      Continue;
+    end;
+
+    if SameText(Input, 'pause') then
+    begin
+      if FMonitorThread.IsPaused then
+        Writeln('Auto-detection is already paused.')
+      else
+        FMonitorThread.Pause;
+      Continue;
+    end;
+
+    if SameText(Input, 'resume') then
+    begin
+      if not FMonitorThread.IsPaused then
+        Writeln('Auto-detection is not paused.')
+      else
+        FMonitorThread.Resume;
+      Continue;
+    end;
+
+    // Handle: build all | build <name>
+    if StartsText('build ', Input) then
+    begin
+      Param := Trim(Copy(Input, 7, MaxInt));
+      if SameText(Param, 'all') then
+      begin
+        Writeln('Building all projects...');
+        for i := 0 to FMonitorThread.FProjectNames.Count - 1 do
+        begin
+          ProjName := FMonitorThread.FProjectNames[i];
+          FMonitorThread.ExecuteActionOnProject(ProjName, daBuild);
+        end;
+        Writeln('Build all completed.');
+      end
+      else
+        FMonitorThread.ExecuteActionOnProject(Param, daBuild);
+      Continue;
+    end;
+
+    // Handle: deploy all | deploy <name>
+    if StartsText('deploy ', Input) then
+    begin
+      Param := Trim(Copy(Input, 8, MaxInt));
+      if SameText(Param, 'all') then
+      begin
+        Writeln('Deploying all projects...');
+        for i := 0 to FMonitorThread.FProjectNames.Count - 1 do
+        begin
+          ProjName := FMonitorThread.FProjectNames[i];
+          FMonitorThread.ExecuteActionOnProject(ProjName, daDeploy);
+        end;
+        Writeln('Deploy all completed.');
+      end
+      else
+        FMonitorThread.ExecuteActionOnProject(Param, daDeploy);
+      Continue;
+    end;
+
+    // Handle: bd all | bd <name> (build and deploy)
+    if StartsText('bd ', Input) then
+    begin
+      Param := Trim(Copy(Input, 4, MaxInt));
+      if SameText(Param, 'all') then
+      begin
+        Writeln('Building and deploying all projects...');
+        for i := 0 to FMonitorThread.FProjectNames.Count - 1 do
+        begin
+          ProjName := FMonitorThread.FProjectNames[i];
+          FMonitorThread.ExecuteActionOnProject(ProjName, daBuildAndDeploy);
+        end;
+        Writeln('Build and deploy all completed.');
+      end
+      else
+        FMonitorThread.ExecuteActionOnProject(Param, daBuildAndDeploy);
+      Continue;
+    end;
+
+    // Default: add project
     FMonitorThread.AddProject(Input);
   end;
 end;
@@ -1044,7 +1290,7 @@ begin
                 LogMessage('FILE_ACTION_ADDED: ' + ExtractFileName(FileName), 4);
                 FullPath := FWatchDirectory + '\' + FileName;
 
-                if FileExists(FullPath) and not ShouldIgnoreFile(FullPath) then
+                if FileExists(FullPath) and not ShouldIgnoreFile(FullPath) and not FPaused then
                 begin
                   LogMessage('Shared library created: ' + ExtractFileName(FullPath), 4);
 
@@ -1392,6 +1638,10 @@ begin
   if FPendingFiles.Count = 0 then
     Exit;
 
+  // Skip processing when paused
+  if FPaused then
+    Exit;
+
   FilesToProcess := TStringList.Create;
   FilesToRemove := TStringList.Create;
   try
@@ -1462,12 +1712,13 @@ var
 begin
   SearchPath := IncludeTrailingPathDelimiter(Directory);
 
-  // Find .dpr files
+  // Find .dpr files (exclude .dproj which also matches *.dpr pattern on Windows)
   if FindFirst(SearchPath + '*.dpr', faAnyFile, SearchRec) = 0 then
   begin
     try
       repeat
-        if (SearchRec.Attr and faDirectory) = 0 then
+        if ((SearchRec.Attr and faDirectory) = 0) and
+           SameText(ExtractFileExt(SearchRec.Name), '.dpr') then
           Files.Add(SearchPath + SearchRec.Name);
       until FindNext(SearchRec) <> 0;
     finally
@@ -1505,7 +1756,48 @@ var
   MonitorThread: TAPKMonitorThread;
   InputThread: TInputThread;
 
+function IsHelpParam(const Param: string): Boolean;
+var
+  P: string;
 begin
+  P := LowerCase(Param);
+  Result := (P = 'help') or (P = '-help') or (P = '--help') or
+            (P = '/help') or (P = '-h') or (P = '--h') or (P = '/h') or (P = '/?');
+end;
+
+procedure ShowHelp;
+begin
+  Writeln('=== APK Deploy Monitor ===');
+  Writeln;
+  Writeln('Usage: apkmon [options]');
+  Writeln;
+  Writeln('Options:');
+  Writeln('  --help, -h, /?, help   Show this help message');
+  Writeln;
+  Writeln('Interactive commands (during monitoring):');
+  Writeln('  list                   Show current projects');
+  Writeln('  build all|<name>       Build all or specific project');
+  Writeln('  deploy all|<name>      Deploy all or specific project');
+  Writeln('  bd all|<name>          Build and deploy all or specific project');
+  Writeln('  pause                  Pause auto-detection');
+  Writeln('  resume                 Resume auto-detection');
+  Writeln('  <projectname>          Add a new project to monitor');
+  Writeln('  help                   Show commands help');
+  Writeln('  quit                   Exit');
+  Writeln;
+  Writeln('Description:');
+  Writeln('  Monitors a directory for .so file changes and automatically');
+  Writeln('  builds and/or deploys Delphi Android projects to connected devices.');
+end;
+
+begin
+  // Check for help parameter
+  if (ParamCount > 0) and IsHelpParam(ParamStr(1)) then
+  begin
+    ShowHelp;
+    Exit;
+  end;
+
   Writeln('=== APK Deploy Monitor ===');
   Writeln;
 
