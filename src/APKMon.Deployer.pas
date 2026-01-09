@@ -4,7 +4,8 @@ interface
 
 uses
   SysUtils, Classes,
-  APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor;
+  APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
+  APKMon.Logcat;
 
 type
   TAPKDeployer = class
@@ -16,6 +17,7 @@ type
     FDeployAction: TDeployAction;
     FBuildConfigMapper: TEnumMapper<TBuildConfig>;
     FDeployActionMapper: TEnumMapper<TDeployAction>;
+    FLogcatManager: TLogcatManager;
     procedure InitializeMappers;
   public
     constructor Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager; StabilityChecker: TFileStabilityChecker; BuildConfig: TBuildConfig; DeployAction: TDeployAction);
@@ -27,9 +29,11 @@ type
     function FindAPKRecursively(const StartDirectory: string): string;
     function DetermineTargetABI(const APKPath: string; const Platform: TTargetPlatform): string;
     function DeterminePlatformFromPath(const FilePath: string): TTargetPlatform;
+    procedure SetLogcatManager(ALogcatManager: TLogcatManager);
     property BuildConfigMapper: TEnumMapper<TBuildConfig> read FBuildConfigMapper;
     property DeployActionMapper: TEnumMapper<TDeployAction> read FDeployActionMapper;
     property DeployAction: TDeployAction read FDeployAction;
+    property LogcatManager: TLogcatManager read FLogcatManager write FLogcatManager;
   end;
 
 implementation
@@ -67,12 +71,22 @@ begin
   FDeployActionMapper.AddMapping(daBuildAndDeploy, 'Build and Deploy');
 end;
 
+procedure TAPKDeployer.SetLogcatManager(ALogcatManager: TLogcatManager);
+begin
+  FLogcatManager := ALogcatManager;
+end;
+
 function TAPKDeployer.BuildProject(const ProjectFile: string; const Platform: TTargetPlatform): Boolean;
 var
   Command: string;
   PlatformStr: string;
 begin
   FStabilityChecker.BuildInProgress := True;
+
+  // Auto-pause logcat during build
+  if Assigned(FLogcatManager) then
+    FLogcatManager.AutoPause;
+
   try
     PlatformStr := TConditionalHelper<string>.IfThen(Platform = tpAndroid64, 'Android64', 'Android');
 
@@ -89,6 +103,10 @@ begin
   finally
     FStabilityChecker.BuildInProgress := False;
     FStabilityChecker.UpdateLastBuildTime;
+
+    // Auto-resume logcat after build
+    if Assigned(FLogcatManager) then
+      FLogcatManager.AutoResume;
   end;
 end;
 

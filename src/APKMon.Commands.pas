@@ -4,7 +4,8 @@ interface
 
 uses
   Windows, SysUtils, Classes, Generics.Collections, DateUtils,
-  APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor, APKMon.Deployer;
+  APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
+  APKMon.Deployer, APKMon.Logcat;
 
 type
   TMonitorState = class
@@ -27,6 +28,7 @@ type
     FDeployer: TAPKDeployer;
     FMonitorState: TMonitorState;
     FPendingProcessor: TPendingFileProcessor;
+    FLogcatManager: TLogcatManager;
 
     procedure PrintHelp;
     procedure HandleList;
@@ -39,12 +41,13 @@ type
     procedure HandleBuild(const Param: string);
     procedure HandleDeploy(const Param: string);
     procedure HandleBuildAndDeploy(const Param: string);
+    procedure HandleLogcat(const Param: string);
   protected
     procedure Execute; override;
   public
     constructor Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
       Deployer: TAPKDeployer; MonitorState: TMonitorState;
-      PendingProcessor: TPendingFileProcessor);
+      PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager);
   end;
 
 implementation
@@ -89,7 +92,7 @@ end;
 
 constructor TInputThread.Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
   Deployer: TAPKDeployer; MonitorState: TMonitorState;
-  PendingProcessor: TPendingFileProcessor);
+  PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager);
 begin
   inherited Create(False);
   FADBExecutor := ADBExecutor;
@@ -97,6 +100,7 @@ begin
   FDeployer := Deployer;
   FMonitorState := MonitorState;
   FPendingProcessor := PendingProcessor;
+  FLogcatManager := LogcatManager;
   FreeOnTerminate := True;
 end;
 
@@ -113,7 +117,14 @@ begin
   Writeln('  pair <ip>:<port>    - Pair with WiFi device (Android 11+)');
   Writeln('  connect <ip>:<port> - Connect to WiFi device');
   Writeln('  disconnect [<ip>:<port>] - Disconnect WiFi device(s)');
-  Writeln('  <projectname>       - Add a new project to monitor');
+  Writeln('  logcat [filter]     - Start logcat (optional package filter)');
+  Writeln('  logcat -s <device> [filter] - Start logcat on specific device');
+  Writeln('  logcat stop         - Stop logcat');
+  Writeln('  logcat pause        - Pause logcat output');
+  Writeln('  logcat resume       - Resume logcat output');
+  Writeln('  logcat clear        - Clear logcat buffer');
+  Writeln('  logcat status       - Show logcat status');
+  Writeln('  add <project>       - Add a new project to monitor');
   Writeln('  quit                - Exit');
 end;
 
@@ -263,6 +274,67 @@ begin
     FDeployer.ExecuteActionOnProject(Param, daBuildAndDeploy);
 end;
 
+procedure TInputThread.HandleLogcat(const Param: string);
+var
+  DeviceId, Filter, Rest: string;
+  SpacePos: Integer;
+begin
+  // Parse the parameter
+  if Param = '' then
+  begin
+    // Start logcat with no filter
+    FLogcatManager.Start('', '');
+  end
+  else if SameText(Param, 'stop') then
+  begin
+    FLogcatManager.Stop;
+  end
+  else if SameText(Param, 'pause') then
+  begin
+    FLogcatManager.Pause;
+  end
+  else if SameText(Param, 'resume') then
+  begin
+    FLogcatManager.Resume;
+  end
+  else if SameText(Param, 'clear') then
+  begin
+    FLogcatManager.Clear('');
+  end
+  else if SameText(Param, 'status') then
+  begin
+    Writeln(FLogcatManager.GetStatus);
+  end
+  else if StartsText('-s ', Param) then
+  begin
+    // logcat -s <device> [filter]
+    Rest := Trim(Copy(Param, 4, MaxInt));
+    SpacePos := Pos(' ', Rest);
+    if SpacePos > 0 then
+    begin
+      DeviceId := Copy(Rest, 1, SpacePos - 1);
+      Filter := Trim(Copy(Rest, SpacePos + 1, MaxInt));
+    end
+    else
+    begin
+      DeviceId := Rest;
+      Filter := '';
+    end;
+    FLogcatManager.Start(DeviceId, Filter);
+  end
+  else if StartsText('clear ', Param) then
+  begin
+    // logcat clear <device>
+    DeviceId := Trim(Copy(Param, 7, MaxInt));
+    FLogcatManager.Clear(DeviceId);
+  end
+  else
+  begin
+    // logcat <filter>
+    FLogcatManager.Start('', Param);
+  end;
+end;
+
 procedure TInputThread.Execute;
 var
   Input, Param: string;
@@ -359,8 +431,32 @@ begin
       Continue;
     end;
 
-    // Default: add project
-    FProjectManager.AddProject(Input);
+    if SameText(Input, 'logcat') then
+    begin
+      HandleLogcat('');
+      Continue;
+    end;
+
+    if StartsText('logcat ', Input) then
+    begin
+      Param := Trim(Copy(Input, 8, MaxInt));
+      HandleLogcat(Param);
+      Continue;
+    end;
+
+    if StartsText('add ', Input) then
+    begin
+      Param := Trim(Copy(Input, 5, MaxInt));
+      if Param <> '' then
+        FProjectManager.AddProject(Param)
+      else
+        Writeln('Usage: add <projectname>');
+      Continue;
+    end;
+
+    // Unknown command
+    Writeln('Unknown command: ', Input);
+    Writeln('Type "help" for available commands.');
   end;
 end;
 

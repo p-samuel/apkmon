@@ -6,7 +6,7 @@ uses
   SysUtils, Classes;
 
 type
-  TLogColor = (lcDefault, lcGreen, lcRed, lcYellow, lcBlue, lcMagenta);
+  TLogColor = (lcDefault, lcGreen, lcRed, lcYellow, lcBlue, lcMagenta, lcCyan);
 
 procedure LogMessage(const Msg: string; Color: TLogColor = lcDefault);
 procedure FindFilesRecursive(const Directory, Extension: string; Files: TStringList);
@@ -19,7 +19,7 @@ implementation
 
 procedure LogMessage(const Msg: string; Color: TLogColor = lcDefault);
 const
-  Colors: array[TLogColor] of string = ('', #27'[32m', #27'[31m', #27'[33m', #27'[34m', #27'[35m');
+  Colors: array[TLogColor] of string = ('', #27'[32m', #27'[31m', #27'[33m', #27'[34m', #27'[35m', #27'[36m');
 begin
   if Color <> lcDefault then
     Writeln(FormatDateTime('hh:nn:ss', Now), ' ', Colors[Color], Msg, #27'[0m')
@@ -133,7 +133,14 @@ begin
   Writeln('  pair <ip>:<port>       Pair with WiFi device (Android 11+)');
   Writeln('  connect <ip>:<port>    Connect to WiFi device');
   Writeln('  disconnect [<ip>:<port>] Disconnect WiFi device(s)');
-  Writeln('  <projectname>          Add a new project to monitor');
+  Writeln('  logcat [filter]        Start logcat (optional package filter)');
+  Writeln('  logcat -s <device> [filter] Start logcat on specific device');
+  Writeln('  logcat stop            Stop logcat');
+  Writeln('  logcat pause           Pause logcat output');
+  Writeln('  logcat resume          Resume logcat output');
+  Writeln('  logcat clear           Clear logcat buffer');
+  Writeln('  logcat status          Show logcat status');
+  Writeln('  add <project>          Add a new project to monitor');
   Writeln('  help                   Show commands help');
   Writeln('  quit                   Exit');
   Writeln;

@@ -5,7 +5,7 @@ interface
 uses
   Windows, SysUtils, Classes,
   APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
-  APKMon.Deployer, APKMon.Commands;
+  APKMon.Deployer, APKMon.Commands, APKMon.Logcat;
 
 type
   TAPKMonitorThread = class(TThread)
@@ -17,6 +17,7 @@ type
     FPendingProcessor: TPendingFileProcessor;
     FDeployer: TAPKDeployer;
     FMonitorState: TMonitorState;
+    FLogcatManager: TLogcatManager;
   protected
     procedure Execute; override;
   public
@@ -27,6 +28,7 @@ type
     property Deployer: TAPKDeployer read FDeployer;
     property MonitorState: TMonitorState read FMonitorState;
     property PendingProcessor: TPendingFileProcessor read FPendingProcessor;
+    property LogcatManager: TLogcatManager read FLogcatManager;
   end;
 
 implementation
@@ -60,6 +62,10 @@ begin
   FPendingProcessor := TPendingFileProcessor.Create(FStabilityChecker);
   FDeployer := TAPKDeployer.Create(FADBExecutor, FProjectManager, FStabilityChecker, BuildConfig, DeployAction);
   FMonitorState := TMonitorState.Create;
+  FLogcatManager := TLogcatManager.Create(FADBExecutor);
+
+  // Wire logcat manager to deployer for auto-pause during builds
+  FDeployer.SetLogcatManager(FLogcatManager);
 
   // Set up file ready callback
   FPendingProcessor.OnFileReady := procedure(FilePath: string)
@@ -73,6 +79,7 @@ end;
 
 destructor TAPKMonitorThread.Destroy;
 begin
+  FLogcatManager.Free;
   FADBExecutor.Free;
   FProjectManager.Free;
   FStabilityChecker.Free;

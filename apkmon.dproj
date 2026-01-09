@@ -190,6 +190,7 @@
         <DCCReference Include="src\APKMon.Commands.pas"/>
         <DCCReference Include="src\APKMon.Watcher.pas"/>
         <DCCReference Include="src\APKMon.App.pas"/>
+        <DCCReference Include="src\APKMon.Logcat.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

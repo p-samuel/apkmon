@@ -295,7 +295,8 @@ begin
     MonitorThread.ProjectManager,
     MonitorThread.Deployer,
     MonitorThread.MonitorState,
-    MonitorThread.PendingProcessor
+    MonitorThread.PendingProcessor,
+    MonitorThread.LogcatManager
   );
 
   // Wait for input thread to finish (user typed 'quit')
