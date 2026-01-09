@@ -131,7 +131,7 @@ type
     procedure AddProject(const ProjectName: string);
     procedure ExecuteActionOnProject(const ProjectName: string; Action: TDeployAction);
     procedure Pause;
-    procedure Resume;
+    procedure ResumeMonitoring;
     function IsPaused: Boolean;
   end;
 
@@ -359,7 +359,7 @@ begin
   LogMessage('Auto-detection paused', 3);
 end;
 
-procedure TAPKMonitorThread.Resume;
+procedure TAPKMonitorThread.ResumeMonitoring;
 begin
   FPaused := False;
   // Clear any pending files that accumulated while paused
@@ -398,6 +398,10 @@ begin
   Writeln('  bd all|<name>       - Build and deploy all or specific project');
   Writeln('  pause               - Pause auto-detection');
   Writeln('  resume              - Resume auto-detection');
+  Writeln('  devices             - List connected devices (USB and WiFi)');
+  Writeln('  pair <ip>:<port>    - Pair with WiFi device (Android 11+)');
+  Writeln('  connect <ip>:<port> - Connect to WiFi device');
+  Writeln('  disconnect [<ip>:<port>] - Disconnect WiFi device(s)');
   Writeln('  <projectname>       - Add a new project to monitor');
   Writeln('  quit                - Exit');
   Writeln;
@@ -437,6 +441,10 @@ begin
       Writeln('  bd all|<name>       - Build and deploy all or specific project');
       Writeln('  pause               - Pause auto-detection');
       Writeln('  resume              - Resume auto-detection');
+      Writeln('  devices             - List connected devices (USB and WiFi)');
+      Writeln('  pair <ip>:<port>    - Pair with WiFi device (Android 11+)');
+      Writeln('  connect <ip>:<port> - Connect to WiFi device');
+      Writeln('  disconnect [<ip>:<port>] - Disconnect WiFi device(s)');
       Writeln('  <projectname>       - Add a new project to monitor');
       Writeln('  quit                - Exit');
       Continue;
@@ -456,7 +464,77 @@ begin
       if not FMonitorThread.IsPaused then
         Writeln('Auto-detection is not paused.')
       else
-        FMonitorThread.Resume;
+        FMonitorThread.ResumeMonitoring;
+      Continue;
+    end;
+
+    // Handle: devices - list connected devices
+    if SameText(Input, 'devices') then
+    begin
+      Writeln('Listing connected devices...');
+      Writeln(FMonitorThread.GetCommandOutput('adb devices'));
+      Continue;
+    end;
+
+    // Handle: pair <ip>:<port> - pair with WiFi device
+    if StartsText('pair ', Input) then
+    begin
+      Param := Trim(Copy(Input, 6, MaxInt));
+      if Param = '' then
+      begin
+        Writeln('Usage: pair <ip>:<pairing-port>');
+        Writeln('  On your device: Settings > Developer options > Wireless debugging');
+        Writeln('  Tap "Pair device with pairing code" to get the IP, port, and 6-digit code');
+      end
+      else
+      begin
+        Writeln('Pairing with device at: ' + Param);
+        Writeln('Enter the 6-digit pairing code shown on your device:');
+        Write('Pairing code: ');
+        Readln(ProjName); // Reuse ProjName variable for pairing code
+        if ProjName <> '' then
+        begin
+          Writeln('Executing: adb pair ' + Param + ' ' + ProjName);
+          Writeln(FMonitorThread.GetCommandOutput('adb pair ' + Param + ' ' + ProjName));
+        end
+        else
+          Writeln('Pairing cancelled.');
+      end;
+      Continue;
+    end;
+
+    // Handle: connect <ip>:<port> - connect to WiFi device
+    if StartsText('connect ', Input) then
+    begin
+      Param := Trim(Copy(Input, 9, MaxInt));
+      if Param = '' then
+      begin
+        Writeln('Usage: connect <ip>:<port>');
+        Writeln('  Use the IP and port shown in Wireless debugging settings');
+        Writeln('  (Note: connection port is different from pairing port)');
+      end
+      else
+      begin
+        Writeln('Connecting to device at: ' + Param);
+        Writeln(FMonitorThread.GetCommandOutput('adb connect ' + Param));
+      end;
+      Continue;
+    end;
+
+    // Handle: disconnect [<ip>:<port>] - disconnect WiFi device(s)
+    if StartsText('disconnect', Input) then
+    begin
+      Param := Trim(Copy(Input, 11, MaxInt));
+      if Param = '' then
+      begin
+        Writeln('Disconnecting all WiFi devices...');
+        Writeln(FMonitorThread.GetCommandOutput('adb disconnect'));
+      end
+      else
+      begin
+        Writeln('Disconnecting device: ' + Param);
+        Writeln(FMonitorThread.GetCommandOutput('adb disconnect ' + Param));
+      end;
       Continue;
     end;
 
@@ -1781,6 +1859,10 @@ begin
   Writeln('  bd all|<name>          Build and deploy all or specific project');
   Writeln('  pause                  Pause auto-detection');
   Writeln('  resume                 Resume auto-detection');
+  Writeln('  devices                List connected devices (USB and WiFi)');
+  Writeln('  pair <ip>:<port>       Pair with WiFi device (Android 11+)');
+  Writeln('  connect <ip>:<port>    Connect to WiFi device');
+  Writeln('  disconnect [<ip>:<port>] Disconnect WiFi device(s)');
   Writeln('  <projectname>          Add a new project to monitor');
   Writeln('  help                   Show commands help');
   Writeln('  quit                   Exit');
@@ -1788,6 +1870,7 @@ begin
   Writeln('Description:');
   Writeln('  Monitors a directory for .so file changes and automatically');
   Writeln('  builds and/or deploys Delphi Android projects to connected devices.');
+  Writeln('  Supports both USB and WiFi connected devices (Android 11+ for WiFi).');
 end;
 
 begin
