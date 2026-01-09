@@ -125,3 +125,4 @@ packages/
 # Custom apkmon specific ignores (add your project-specific files here)
 # config/local_settings.ini
 # data/temp/*.res
+APKMon.res
