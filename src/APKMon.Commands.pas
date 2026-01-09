@@ -5,7 +5,7 @@ interface
 uses
   Windows, SysUtils, Classes, Generics.Collections, DateUtils,
   APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
-  APKMon.Deployer, APKMon.Logcat;
+  APKMon.Deployer, APKMon.Logcat, APKMon.Console;
 
 type
   TMonitorState = class
@@ -164,7 +164,7 @@ end;
 
 procedure TInputThread.HandlePair(const Param: string);
 var
-  PairingCode: string;
+  PairingCode, OldPrompt: string;
 begin
   if Param = '' then
   begin
@@ -176,8 +176,10 @@ begin
   begin
     Writeln('Pairing with device at: ' + Param);
     Writeln('Enter the 6-digit pairing code shown on your device:');
-    Write('Pairing code: ');
-    Readln(PairingCode);
+    OldPrompt := Console.Prompt;
+    Console.Prompt := 'Pairing code: ';
+    PairingCode := Trim(Console.ReadLine);
+    Console.Prompt := OldPrompt;
     if PairingCode <> '' then
     begin
       Writeln('Executing: adb pair ' + Param + ' ' + PairingCode);
@@ -343,11 +345,13 @@ begin
   PrintHelp;
   Writeln;
 
+  // Initialize console TUI
+  Console.Initialize;
+  Console.Prompt := '> ';
+
   while not Terminated do
   begin
-    Write('> ');
-    Readln(Input);
-    Input := Trim(Input);
+    Input := Trim(Console.ReadLine);
 
     if Input = '' then
       Continue;

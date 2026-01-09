@@ -3,7 +3,7 @@ unit APKMon.Utils;
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes, APKMon.Console;
 
 type
   TLogColor = (lcDefault, lcGreen, lcRed, lcYellow, lcBlue, lcMagenta, lcCyan);
@@ -20,11 +20,19 @@ implementation
 procedure LogMessage(const Msg: string; Color: TLogColor = lcDefault);
 const
   Colors: array[TLogColor] of string = ('', #27'[32m', #27'[31m', #27'[33m', #27'[34m', #27'[35m', #27'[36m');
+var
+  FormattedMsg: string;
 begin
-  if Color <> lcDefault then
-    Writeln(FormatDateTime('hh:nn:ss', Now), ' ', Colors[Color], Msg, #27'[0m')
+  FormattedMsg := FormatDateTime('hh:nn:ss', Now) + ' ' + Msg;
+  if Console.Initialized then
+    Console.WriteLine(FormattedMsg, Colors[Color])
   else
-    Writeln(FormatDateTime('hh:nn:ss', Now), ' ', Msg);
+  begin
+    if Color <> lcDefault then
+      Writeln(Colors[Color], FormattedMsg, #27'[0m')
+    else
+      Writeln(FormattedMsg);
+  end;
 end;
 
 procedure FindFilesRecursive(const Directory, Extension: string; Files: TStringList);

@@ -181,6 +181,7 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="src\APKMon.Console.pas"/>
         <DCCReference Include="src\APKMon.Types.pas"/>
         <DCCReference Include="src\APKMon.Utils.pas"/>
         <DCCReference Include="src\APKMon.ADB.pas"/>

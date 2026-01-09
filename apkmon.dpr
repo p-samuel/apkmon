@@ -3,6 +3,7 @@ program apkmon;
 {$APPTYPE CONSOLE}
 
 uses
+  APKMon.Console in 'src\APKMon.Console.pas',
   APKMon.Types in 'src\APKMon.Types.pas',
   APKMon.Utils in 'src\APKMon.Utils.pas',
   APKMon.ADB in 'src\APKMon.ADB.pas',
