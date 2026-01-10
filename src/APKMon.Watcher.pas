@@ -5,7 +5,8 @@ interface
 uses
   Windows, SysUtils, Classes,
   APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
-  APKMon.Deployer, APKMon.Commands, APKMon.Logcat, APKMon.Recorder, APKMon.FPS;
+  APKMon.Deployer, APKMon.Commands, APKMon.Logcat, APKMon.Recorder, APKMon.FPS,
+  APKMon.Profile;
 
 type
   TAPKMonitorThread = class(TThread)
@@ -20,6 +21,7 @@ type
     FLogcatManager: TLogcatManager;
     FRecorderManager: TScreenRecorderManager;
     FFPSManager: TFPSManager;
+    FProfileManager: TProfileManager;
   protected
     procedure Execute; override;
   public
@@ -33,6 +35,7 @@ type
     property LogcatManager: TLogcatManager read FLogcatManager;
     property RecorderManager: TScreenRecorderManager read FRecorderManager;
     property FPSManager: TFPSManager read FFPSManager;
+    property ProfileManager: TProfileManager read FProfileManager;
   end;
 
 implementation
@@ -69,6 +72,7 @@ begin
   FLogcatManager := TLogcatManager.Create(FADBExecutor);
   FRecorderManager := TScreenRecorderManager.Create(FADBExecutor);
   FFPSManager := TFPSManager.Create(FADBExecutor);
+  FProfileManager := TProfileManager.Create(FADBExecutor);
 
   // Wire logcat manager to deployer for auto-pause during builds
   FDeployer.SetLogcatManager(FLogcatManager);
@@ -85,6 +89,7 @@ end;
 
 destructor TAPKMonitorThread.Destroy;
 begin
+  FProfileManager.Free;
   FFPSManager.Free;
   FRecorderManager.Free;
   FLogcatManager.Free;

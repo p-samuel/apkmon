@@ -5,7 +5,8 @@ interface
 uses
   Windows, SysUtils, Classes, Generics.Collections, DateUtils,
   APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
-  APKMon.Deployer, APKMon.Logcat, APKMon.Recorder, APKMon.FPS, APKMon.Console;
+  APKMon.Deployer, APKMon.Logcat, APKMon.Recorder, APKMon.FPS, APKMon.Profile,
+  APKMon.Console;
 
 type
   TMonitorState = class
@@ -31,6 +32,7 @@ type
     FLogcatManager: TLogcatManager;
     FRecorderManager: TScreenRecorderManager;
     FFPSManager: TFPSManager;
+    FProfileManager: TProfileManager;
 
     procedure PrintHelp;
     procedure HandleList;
@@ -46,13 +48,15 @@ type
     procedure HandleLogcat(const Param: string);
     procedure HandleRecord(const Param: string);
     procedure HandleFPS(const Param: string);
+    procedure HandleProfile(const Param: string);
   protected
     procedure Execute; override;
   public
     constructor Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
       Deployer: TAPKDeployer; MonitorState: TMonitorState;
       PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager;
-      RecorderManager: TScreenRecorderManager; FPSManager: TFPSManager);
+      RecorderManager: TScreenRecorderManager; FPSManager: TFPSManager;
+      ProfileManager: TProfileManager);
   end;
 
 implementation
@@ -98,7 +102,8 @@ end;
 constructor TInputThread.Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
   Deployer: TAPKDeployer; MonitorState: TMonitorState;
   PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager;
-  RecorderManager: TScreenRecorderManager; FPSManager: TFPSManager);
+  RecorderManager: TScreenRecorderManager; FPSManager: TFPSManager;
+  ProfileManager: TProfileManager);
 begin
   inherited Create(False);
   FADBExecutor := ADBExecutor;
@@ -109,6 +114,7 @@ begin
   FLogcatManager := LogcatManager;
   FRecorderManager := RecorderManager;
   FFPSManager := FPSManager;
+  FProfileManager := ProfileManager;
   FreeOnTerminate := True;
 end;
 
@@ -141,6 +147,9 @@ begin
     Writeln('  fps <device> <package> - Start FPS monitoring');
     Writeln('  fps stop            - Stop FPS monitoring');
     Writeln('  fps status          - Show FPS monitoring status');
+    Writeln('  profile <device> <package> - Start CPU/Memory profiling');
+    Writeln('  profile stop        - Stop profiling');
+    Writeln('  profile status      - Show profiling status');
     Writeln('  add <project>       - Add a new project to monitor');
     Writeln('  quit                - Exit');
   finally
@@ -450,6 +459,47 @@ begin
   end;
 end;
 
+procedure TInputThread.HandleProfile(const Param: string);
+var
+  DeviceId, PackageName, Rest: string;
+  SpacePos: Integer;
+begin
+  if Param = '' then
+  begin
+    // Show usage
+    Writeln('Usage:');
+    Writeln('  profile <device> <package> - Start CPU/Memory profiling');
+    Writeln('  profile stop               - Stop profiling');
+    Writeln('  profile status             - Show profiling status');
+  end
+  else if SameText(Param, 'stop') then
+  begin
+    FProfileManager.Stop;
+  end
+  else if SameText(Param, 'status') then
+  begin
+    Writeln(FProfileManager.GetStatus);
+  end
+  else
+  begin
+    // profile <device> <package>
+    Rest := Param;
+    SpacePos := Pos(' ', Rest);
+    if SpacePos > 0 then
+    begin
+      DeviceId := Copy(Rest, 1, SpacePos - 1);
+      PackageName := Trim(Copy(Rest, SpacePos + 1, MaxInt));
+      FProfileManager.Start(DeviceId, PackageName);
+    end
+    else
+    begin
+      // Only device provided, no package
+      Writeln('Error: Package name is required.');
+      Writeln('Usage: profile <device-id> <package-name>');
+    end;
+  end;
+end;
+
 procedure TInputThread.Execute;
 var
   Input, Param: string;
@@ -584,6 +634,19 @@ begin
     begin
       Param := Trim(Copy(Input, 5, MaxInt));
       HandleFPS(Param);
+      Continue;
+    end;
+
+    if SameText(Input, 'profile') then
+    begin
+      HandleProfile('');
+      Continue;
+    end;
+
+    if StartsText('profile ', Input) then
+    begin
+      Param := Trim(Copy(Input, 9, MaxInt));
+      HandleProfile(Param);
       Continue;
     end;
 

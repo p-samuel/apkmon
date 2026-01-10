@@ -16,6 +16,7 @@ uses
   APKMon.Logcat in 'src\APKMon.Logcat.pas',
   APKMon.Recorder in 'src\APKMon.Recorder.pas',
   APKMon.FPS in 'src\APKMon.FPS.pas',
+  APKMon.Profile in 'src\APKMon.Profile.pas',
   APKMon.App in 'src\APKMon.App.pas';
 
 var
