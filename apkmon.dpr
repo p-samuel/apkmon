@@ -13,6 +13,7 @@ uses
   APKMon.Commands in 'src\APKMon.Commands.pas',
   APKMon.Watcher in 'src\APKMon.Watcher.pas',
   APKMon.Logcat in 'src\APKMon.Logcat.pas',
+  APKMon.Recorder in 'src\APKMon.Recorder.pas',
   APKMon.App in 'src\APKMon.App.pas';
 
 var

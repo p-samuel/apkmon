@@ -296,12 +296,16 @@ begin
     MonitorThread.Deployer,
     MonitorThread.MonitorState,
     MonitorThread.PendingProcessor,
-    MonitorThread.LogcatManager
+    MonitorThread.LogcatManager,
+    MonitorThread.RecorderManager
   );
 
   // Wait for input thread to finish (user typed 'quit')
   while not MonitorThread.MonitorState.IsTerminated do
     Sleep(100);
+
+  // Ensure any active recording is saved before exit
+  MonitorThread.RecorderManager.Shutdown;
 end;
 
 end.

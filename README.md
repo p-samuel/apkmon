@@ -1,43 +1,91 @@
-# 👾apkmon - Delphi to Android APK Deployment
+# APKMon - Delphi Android APK Deploy Monitor
 
-A Windows console application that monitors directories for Android shared library (.so) file changes and automatically builds/deploys APK files to Android emulators.
+A Windows console tool that monitors directories for Android shared library (.so) file changes and automatically builds/deploys APK files to connected devices.
 
 ![Demo](img/demo.gif)
 
-## Notes
+## Requirements
 
-- Only monitors `.so` files to avoid infinite deployment loops. If this happens, maybe your project is rebuilding itself, or something else is causing the .so files to be created consecutively. It should only build when the .so files flag `FILE_ACTION_ADDED` is detected.
-- On the first time, you need to build the project manually via `Project > Deployment > Deploy`, so Delphi can insert set `Deploy` options in the `.dproj` file.
-- Automatically detects Android emulators using `adb devices`
-- Supports multiple project monitoring simultaneously and multiple devices deployment (physical/emulator)
+- Windows
+- Delphi/RAD Studio with Android support
+- ADB in PATH
+- FFmpeg in PATH (for screen recording)
 
-## Setup
-
-- Windows OS
-- Delphi/RAD Studio with Android development support
-- Android SDK with ADB in PATH
-- Running Android emulator
-
-With Android Studio and .NET Framework installed, add these directories to your System PATH environment variable:
-
+```powershell
+choco install ffmpeg
 ```
-C:\Users\<your_user>\AppData\Local\Android\Sdk\emulator
-C:\Users\<your_user>\AppData\Local\Android\Sdk\platform-tools
+
+### Environment Setup
+
+Add to System PATH:
+```
+C:\Users\<user>\AppData\Local\Android\Sdk\emulator
+C:\Users\<user>\AppData\Local\Android\Sdk\platform-tools
 C:\Windows\Microsoft.NET\Framework\v4.0.30319
 ```
 
-Add these environment variables to your user or system variables:
-
+Environment variables:
 - **BDS**: `C:\Program Files (x86)\Embarcadero\Studio\23.0`
 - **FrameworkDir**: `C:\Windows\Microsoft.NET\Framework\v4.0.30319`
 - **FrameworkVersion**: `v4.5`
 
-![alt text](img/image.png)
+## Usage
 
-This ensures that MSBuild, adb, and other tools are accessible via the terminal.
+Run `apkmon.exe` and follow prompts to configure watch directory, projects, build config, and deploy action.
 
-## Notice
+## Commands
 
-Delphi FMX ships only ARM/ARM64 libs, so x86/x86_64 devices won’t run it. However, for emulators, both ARM/ARM64 or x86_64 are supported. Keep an ARM/x86_64 emulator (Google APIs ARM image) or a physical ARM device running and let apkmon target that.
+### Projects
+| Command | Description |
+|---------|-------------|
+| `list` | Show current projects |
+| `add <project>` | Add project to monitor |
+| `build all\|<name>` | Build project(s) |
+| `deploy all\|<name>` | Deploy project(s) |
+| `bd all\|<name>` | Build and deploy |
 
-![alt text](img/arch.png)
+### Monitoring
+| Command | Description |
+|---------|-------------|
+| `pause` | Pause auto-detection |
+| `resume` | Resume auto-detection |
+
+### Devices
+| Command | Description |
+|---------|-------------|
+| `devices` | List connected devices |
+| `pair <ip>:<port>` | Pair WiFi device (Android 11+) |
+| `connect <ip>:<port>` | Connect to WiFi device |
+| `disconnect [<ip>:<port>]` | Disconnect WiFi device(s) |
+
+### Logcat
+| Command | Description |
+|---------|-------------|
+| `logcat [filter]` | Start logcat |
+| `logcat -s <device> [filter]` | Logcat on specific device |
+| `logcat stop` | Stop logcat |
+| `logcat pause/resume` | Pause/resume output |
+| `logcat clear` | Clear buffer |
+| `logcat status` | Show status |
+
+### Screen Recording
+| Command | Description |
+|---------|-------------|
+| `record output <path>` | Set output folder |
+| `record start <device>` | Start recording |
+| `record stop` | Stop and save |
+| `record status` | Show status |
+
+Records at 60fps, native resolution. Long recordings auto-segment and merge via FFmpeg. Auto-saves on app exit.
+
+### General
+| Command | Description |
+|---------|-------------|
+| `help` | Show commands |
+| `quit` | Exit |
+
+## Notes
+
+- Only monitors `.so` files to avoid infinite loops
+- First build must be done manually via `Project > Deployment > Deploy`
+- Delphi FMX requires ARM/ARM64 devices (x86 emulators need Google APIs ARM image)

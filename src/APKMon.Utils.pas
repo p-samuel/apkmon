@@ -148,6 +148,10 @@ begin
   Writeln('  logcat resume          Resume logcat output');
   Writeln('  logcat clear           Clear logcat buffer');
   Writeln('  logcat status          Show logcat status');
+  Writeln('  record start <device>  Start screen recording on device');
+  Writeln('  record stop            Stop recording and save');
+  Writeln('  record status          Show recording status');
+  Writeln('  record output <path>   Set output folder for recordings');
   Writeln('  add <project>          Add a new project to monitor');
   Writeln('  help                   Show commands help');
   Writeln('  quit                   Exit');

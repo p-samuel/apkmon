@@ -5,7 +5,7 @@ interface
 uses
   Windows, SysUtils, Classes, Generics.Collections, DateUtils,
   APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
-  APKMon.Deployer, APKMon.Logcat, APKMon.Console;
+  APKMon.Deployer, APKMon.Logcat, APKMon.Recorder, APKMon.Console;
 
 type
   TMonitorState = class
@@ -29,6 +29,7 @@ type
     FMonitorState: TMonitorState;
     FPendingProcessor: TPendingFileProcessor;
     FLogcatManager: TLogcatManager;
+    FRecorderManager: TScreenRecorderManager;
 
     procedure PrintHelp;
     procedure HandleList;
@@ -42,12 +43,14 @@ type
     procedure HandleDeploy(const Param: string);
     procedure HandleBuildAndDeploy(const Param: string);
     procedure HandleLogcat(const Param: string);
+    procedure HandleRecord(const Param: string);
   protected
     procedure Execute; override;
   public
     constructor Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
       Deployer: TAPKDeployer; MonitorState: TMonitorState;
-      PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager);
+      PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager;
+      RecorderManager: TScreenRecorderManager);
   end;
 
 implementation
@@ -92,7 +95,8 @@ end;
 
 constructor TInputThread.Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
   Deployer: TAPKDeployer; MonitorState: TMonitorState;
-  PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager);
+  PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager;
+  RecorderManager: TScreenRecorderManager);
 begin
   inherited Create(False);
   FADBExecutor := ADBExecutor;
@@ -101,6 +105,7 @@ begin
   FMonitorState := MonitorState;
   FPendingProcessor := PendingProcessor;
   FLogcatManager := LogcatManager;
+  FRecorderManager := RecorderManager;
   FreeOnTerminate := True;
 end;
 
@@ -124,6 +129,10 @@ begin
   Writeln('  logcat resume       - Resume logcat output');
   Writeln('  logcat clear        - Clear logcat buffer');
   Writeln('  logcat status       - Show logcat status');
+  Writeln('  record start <device> - Start screen recording on device');
+  Writeln('  record stop         - Stop recording and save');
+  Writeln('  record status       - Show recording status');
+  Writeln('  record output <path> - Set output folder for recordings');
   Writeln('  add <project>       - Add a new project to monitor');
   Writeln('  quit                - Exit');
 end;
@@ -337,6 +346,58 @@ begin
   end;
 end;
 
+procedure TInputThread.HandleRecord(const Param: string);
+var
+  Rest, DeviceId: string;
+begin
+  if Param = '' then
+  begin
+    // Show usage
+    Writeln('Usage:');
+    Writeln('  record start <device> - Start screen recording on device');
+    Writeln('  record stop           - Stop recording and save');
+    Writeln('  record status         - Show recording status');
+    Writeln('  record output <path>  - Set output folder for recordings');
+  end
+  else if SameText(Param, 'stop') then
+  begin
+    FRecorderManager.StopRecording;
+  end
+  else if SameText(Param, 'status') then
+  begin
+    Writeln(FRecorderManager.GetStatus);
+  end
+  else if StartsText('start ', Param) then
+  begin
+    // record start <device>
+    DeviceId := Trim(Copy(Param, 7, MaxInt));
+    FRecorderManager.StartRecording(DeviceId);
+  end
+  else if SameText(Param, 'start') then
+  begin
+    // record start without device
+    Writeln('Error: Device ID is required.');
+    Writeln('Usage: record start <device-id>');
+    Writeln('Use "devices" command to list connected devices.');
+  end
+  else if StartsText('output ', Param) then
+  begin
+    // record output <path>
+    Rest := Trim(Copy(Param, 8, MaxInt));
+    FRecorderManager.SetOutputFolder(Rest);
+  end
+  else if SameText(Param, 'output') then
+  begin
+    // Show current output folder
+    if FRecorderManager.GetOutputFolder <> '' then
+      Writeln('Output folder: ' + FRecorderManager.GetOutputFolder)
+    else
+      Writeln('Output folder not configured. Use "record output <path>" to set.');
+  end
+  else
+    Writeln('Unknown record command. Type "record" for help.');
+end;
+
 procedure TInputThread.Execute;
 var
   Input, Param: string;
@@ -445,6 +506,19 @@ begin
     begin
       Param := Trim(Copy(Input, 8, MaxInt));
       HandleLogcat(Param);
+      Continue;
+    end;
+
+    if SameText(Input, 'record') then
+    begin
+      HandleRecord('');
+      Continue;
+    end;
+
+    if StartsText('record ', Input) then
+    begin
+      Param := Trim(Copy(Input, 8, MaxInt));
+      HandleRecord(Param);
       Continue;
     end;
 
