@@ -1,4 +1,4 @@
-# APKMon - Delphi Android APK Deploy Monitor
+# 👾APKMon - Delphi Android APK Deploy Monitor
 
 A Windows console tool that monitors directories for Android shared library (.so) file changes and automatically builds/deploys APK files to connected devices.
 
@@ -31,7 +31,7 @@ Environment variables:
 
 ## Usage
 
-Run `apkmon.exe` and follow prompts to configure watch directory, projects, build config, and deploy action.
+Run `apkmon.exe` and follow these prompts to configure watch directory, projects, build config, and deploy actions. It includes basic functionality for recording screen, logging and profiling.
 
 ## Commands
 
@@ -76,7 +76,19 @@ Run `apkmon.exe` and follow prompts to configure watch directory, projects, buil
 | `record stop` | Stop and save |
 | `record status` | Show status |
 
-Records at 60fps, native resolution. Long recordings auto-segment and merge via FFmpeg. Auto-saves on app exit.
+Records at 60fps, native resolution. Long recordings auto-segment and merge files via FFmpeg. Configuration path for recordings is persited between sessions. 
+
+### FPS Monitoring
+| Command | Description |
+|---------|-------------|
+| `fps <device> <package>` | Start FPS monitoring |
+| `fps stop` | Stop FPS monitoring |
+
+### Profiling
+| Command | Description |
+|---------|-------------|
+| `profile <device> <package>` | Start CPU/Memory/Battery monitoring |
+| `profile stop` | Stop profiling |
 
 ### General
 | Command | Description |
@@ -87,5 +99,5 @@ Records at 60fps, native resolution. Long recordings auto-segment and merge via 
 ## Notes
 
 - Only monitors `.so` files to avoid infinite loops
-- First build must be done manually via `Project > Deployment > Deploy`
+- Deploy must be done manually on the first build `Project > Deployment > Deploy`
 - Delphi FMX requires ARM/ARM64 devices (x86 emulators need Google APIs ARM image)
