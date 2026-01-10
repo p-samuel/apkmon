@@ -63,7 +63,7 @@ type
 implementation
 
 uses
-  IOUtils;
+  IOUtils, APKMon.Config;
 
 { TScreenRecorderThread }
 
@@ -182,7 +182,7 @@ begin
   inherited Create;
   FADBExecutor := ADBExecutor;
   FRecorderThread := nil;
-  FOutputFolder := '';
+  FOutputFolder := Config.RecordingOutputFolder;  // Load from config
   FState := rsIdle;
   FCurrentDeviceId := '';
 end;
@@ -288,8 +288,9 @@ begin
       DevicePath := FRecorderThread.SegmentPaths[i];
       LocalPath := TPath.Combine(TempFolder, Format('segment_%d.mp4', [i]));
 
+      // Use 5 minute timeout for large video file pulls
       if FADBExecutor.ExecuteCommand(
-        Format('adb -s %s pull "%s" "%s"', [FCurrentDeviceId, DevicePath, LocalPath]), False) then
+        Format('adb -s %s pull "%s" "%s"', [FCurrentDeviceId, DevicePath, LocalPath]), False, 300000) then
       begin
         if FileExists(LocalPath) then
           LocalSegments.Add(LocalPath)
@@ -420,13 +421,16 @@ begin
   LogMessage('Stopping recording...', lcBlue);
   FState := rsStopping;
 
+  // Signal thread to stop BEFORE killing process to prevent new segment
+  if FRecorderThread <> nil then
+    FRecorderThread.Stop;
+
   // Stop the screenrecord process on device
   StopRecordingProcess;
 
-  // Signal thread to stop and wait
+  // Wait for thread to finish
   if FRecorderThread <> nil then
   begin
-    FRecorderThread.Stop;
     FRecorderThread.WaitFor;
 
     // Pull and merge segments
@@ -474,6 +478,8 @@ begin
   end;
 
   FOutputFolder := Folder;
+  Config.RecordingOutputFolder := Folder;  // Save to config
+  Config.Save;
   LogMessage('Recording output folder set to: ' + Folder, lcGreen);
 end;
 

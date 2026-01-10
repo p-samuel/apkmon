@@ -9,7 +9,7 @@ uses
 type
   TADBExecutor = class
   public
-    function ExecuteCommand(const Command: string; ShowOutput: Boolean = True): Boolean;
+    function ExecuteCommand(const Command: string; ShowOutput: Boolean = True; TimeoutMs: DWORD = 0): Boolean;
     function GetCommandOutput(const Command: string): string;
     function GetDevices: TStringList;
     function GetMatchingDevices(const TargetABI: string = ''): TStringList;
@@ -22,12 +22,13 @@ implementation
 
 { TADBExecutor }
 
-function TADBExecutor.ExecuteCommand(const Command: string; ShowOutput: Boolean = True): Boolean;
+function TADBExecutor.ExecuteCommand(const Command: string; ShowOutput: Boolean = True; TimeoutMs: DWORD = 0): Boolean;
 var
   StartupInfo: TStartupInfo;
   ProcessInfo: TProcessInformation;
   ExitCode: DWORD;
   WaitResult: DWORD;
+  ActualTimeout: DWORD;
 begin
   Result := False;
 
@@ -42,9 +43,15 @@ begin
   if CreateProcess(nil, PChar(Command), nil, nil, False, 0, nil, nil, StartupInfo, ProcessInfo) then
   begin
     try
-      // Wait with timeout (60 seconds for build commands, 30 seconds for others)
-      WaitResult := WaitForSingleObject(ProcessInfo.hProcess,
-        TConditionalHelper<DWORD>.IfThen(Pos('msbuild', LowerCase(Command)) > 0, 60000, 30000));
+      // Determine timeout: use provided, or default based on command type
+      if TimeoutMs > 0 then
+        ActualTimeout := TimeoutMs
+      else if Pos('msbuild', LowerCase(Command)) > 0 then
+        ActualTimeout := 60000
+      else
+        ActualTimeout := 30000;
+
+      WaitResult := WaitForSingleObject(ProcessInfo.hProcess, ActualTimeout);
 
       if WaitResult = WAIT_OBJECT_0 then
       begin

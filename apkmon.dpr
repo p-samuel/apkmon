@@ -6,6 +6,7 @@ uses
   APKMon.Console in 'src\APKMon.Console.pas',
   APKMon.Types in 'src\APKMon.Types.pas',
   APKMon.Utils in 'src\APKMon.Utils.pas',
+  APKMon.Config in 'src\APKMon.Config.pas',
   APKMon.ADB in 'src\APKMon.ADB.pas',
   APKMon.Projects in 'src\APKMon.Projects.pas',
   APKMon.Monitor in 'src\APKMon.Monitor.pas',
