@@ -297,7 +297,8 @@ begin
     MonitorThread.MonitorState,
     MonitorThread.PendingProcessor,
     MonitorThread.LogcatManager,
-    MonitorThread.RecorderManager
+    MonitorThread.RecorderManager,
+    MonitorThread.FPSManager
   );
 
   // Wait for input thread to finish (user typed 'quit')

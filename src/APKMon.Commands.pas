@@ -5,7 +5,7 @@ interface
 uses
   Windows, SysUtils, Classes, Generics.Collections, DateUtils,
   APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
-  APKMon.Deployer, APKMon.Logcat, APKMon.Recorder, APKMon.Console;
+  APKMon.Deployer, APKMon.Logcat, APKMon.Recorder, APKMon.FPS, APKMon.Console;
 
 type
   TMonitorState = class
@@ -30,6 +30,7 @@ type
     FPendingProcessor: TPendingFileProcessor;
     FLogcatManager: TLogcatManager;
     FRecorderManager: TScreenRecorderManager;
+    FFPSManager: TFPSManager;
 
     procedure PrintHelp;
     procedure HandleList;
@@ -44,13 +45,14 @@ type
     procedure HandleBuildAndDeploy(const Param: string);
     procedure HandleLogcat(const Param: string);
     procedure HandleRecord(const Param: string);
+    procedure HandleFPS(const Param: string);
   protected
     procedure Execute; override;
   public
     constructor Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
       Deployer: TAPKDeployer; MonitorState: TMonitorState;
       PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager;
-      RecorderManager: TScreenRecorderManager);
+      RecorderManager: TScreenRecorderManager; FPSManager: TFPSManager);
   end;
 
 implementation
@@ -96,7 +98,7 @@ end;
 constructor TInputThread.Create(ADBExecutor: TADBExecutor; ProjectManager: TProjectManager;
   Deployer: TAPKDeployer; MonitorState: TMonitorState;
   PendingProcessor: TPendingFileProcessor; LogcatManager: TLogcatManager;
-  RecorderManager: TScreenRecorderManager);
+  RecorderManager: TScreenRecorderManager; FPSManager: TFPSManager);
 begin
   inherited Create(False);
   FADBExecutor := ADBExecutor;
@@ -106,6 +108,7 @@ begin
   FPendingProcessor := PendingProcessor;
   FLogcatManager := LogcatManager;
   FRecorderManager := RecorderManager;
+  FFPSManager := FPSManager;
   FreeOnTerminate := True;
 end;
 
@@ -135,6 +138,9 @@ begin
     Writeln('  record stop         - Stop recording and save');
     Writeln('  record status       - Show recording status');
     Writeln('  record output <path> - Set output folder for recordings');
+    Writeln('  fps <device> <package> - Start FPS monitoring');
+    Writeln('  fps stop            - Stop FPS monitoring');
+    Writeln('  fps status          - Show FPS monitoring status');
     Writeln('  add <project>       - Add a new project to monitor');
     Writeln('  quit                - Exit');
   finally
@@ -403,6 +409,47 @@ begin
     Writeln('Unknown record command. Type "record" for help.');
 end;
 
+procedure TInputThread.HandleFPS(const Param: string);
+var
+  DeviceId, PackageName, Rest: string;
+  SpacePos: Integer;
+begin
+  if Param = '' then
+  begin
+    // Show usage
+    Writeln('Usage:');
+    Writeln('  fps <device> <package> - Start FPS monitoring');
+    Writeln('  fps stop               - Stop FPS monitoring');
+    Writeln('  fps status             - Show FPS monitoring status');
+  end
+  else if SameText(Param, 'stop') then
+  begin
+    FFPSManager.Stop;
+  end
+  else if SameText(Param, 'status') then
+  begin
+    Writeln(FFPSManager.GetStatus);
+  end
+  else
+  begin
+    // fps <device> <package>
+    Rest := Param;
+    SpacePos := Pos(' ', Rest);
+    if SpacePos > 0 then
+    begin
+      DeviceId := Copy(Rest, 1, SpacePos - 1);
+      PackageName := Trim(Copy(Rest, SpacePos + 1, MaxInt));
+      FFPSManager.Start(DeviceId, PackageName);
+    end
+    else
+    begin
+      // Only device provided, no package
+      Writeln('Error: Package name is required.');
+      Writeln('Usage: fps <device-id> <package-name>');
+    end;
+  end;
+end;
+
 procedure TInputThread.Execute;
 var
   Input, Param: string;
@@ -524,6 +571,19 @@ begin
     begin
       Param := Trim(Copy(Input, 8, MaxInt));
       HandleRecord(Param);
+      Continue;
+    end;
+
+    if SameText(Input, 'fps') then
+    begin
+      HandleFPS('');
+      Continue;
+    end;
+
+    if StartsText('fps ', Input) then
+    begin
+      Param := Trim(Copy(Input, 5, MaxInt));
+      HandleFPS(Param);
       Continue;
     end;
 

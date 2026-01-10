@@ -10,7 +10,7 @@ type
   TADBExecutor = class
   public
     function ExecuteCommand(const Command: string; ShowOutput: Boolean = True; TimeoutMs: DWORD = 0): Boolean;
-    function GetCommandOutput(const Command: string): string;
+    function GetCommandOutput(const Command: string; TimeoutMs: DWORD = 10000): string;
     function GetDevices: TStringList;
     function GetMatchingDevices(const TargetABI: string = ''): TStringList;
     function GetDeviceABI(const DeviceId: string): string;
@@ -76,16 +76,18 @@ begin
   end;
 end;
 
-function TADBExecutor.GetCommandOutput(const Command: string): string;
+function TADBExecutor.GetCommandOutput(const Command: string; TimeoutMs: DWORD = 10000): string;
 var
   StartupInfo: TStartupInfo;
   ProcessInfo: TProcessInformation;
   ReadPipe, WritePipe: THandle;
   SecurityAttr: TSecurityAttributes;
-  Buffer: array[0..4095] of AnsiChar;
-  BytesRead: DWORD;
+  Buffer: array[0..8191] of AnsiChar;
+  BytesRead, BytesAvail, TotalRead: DWORD;
   CommandLine: string;
-  CommandBuffer: array[0..511] of Char;
+  CommandBuffer: array[0..1023] of Char;
+  OutputBuilder: TStringBuilder;
+  StartTick: DWORD;
 begin
   Result := '';
 
@@ -96,6 +98,7 @@ begin
   if not CreatePipe(ReadPipe, WritePipe, @SecurityAttr, 0) then
     Exit;
 
+  OutputBuilder := TStringBuilder.Create;
   try
     ZeroMemory(@StartupInfo, SizeOf(StartupInfo));
     StartupInfo.cb := SizeOf(StartupInfo);
@@ -113,19 +116,54 @@ begin
         CloseHandle(WritePipe);
         WritePipe := 0;
 
-        if WaitForSingleObject(ProcessInfo.hProcess, 10000) = WAIT_OBJECT_0 then
+        StartTick := GetTickCount;
+        TotalRead := 0;
+
+        // Read output as it becomes available, with timeout
+        while True do
         begin
-          if ReadFile(ReadPipe, Buffer, SizeOf(Buffer) - 1, BytesRead, nil) and (BytesRead > 0) then
+          // Check if data is available without blocking
+          if PeekNamedPipe(ReadPipe, nil, 0, nil, @BytesAvail, nil) and (BytesAvail > 0) then
           begin
-            Buffer[BytesRead] := #0;
-            Result := Trim(string(Buffer));
+            if ReadFile(ReadPipe, Buffer, SizeOf(Buffer) - 1, BytesRead, nil) and (BytesRead > 0) then
+            begin
+              Buffer[BytesRead] := #0;
+              OutputBuilder.Append(string(AnsiString(Buffer)));
+              Inc(TotalRead, BytesRead);
+              if TotalRead > 512 * 1024 then // Limit to 512KB
+                Break;
+            end;
+          end
+          else
+          begin
+            // No data available - check if process ended or timeout
+            if WaitForSingleObject(ProcessInfo.hProcess, 50) = WAIT_OBJECT_0 then
+            begin
+              // Process ended - read any remaining data
+              while PeekNamedPipe(ReadPipe, nil, 0, nil, @BytesAvail, nil) and (BytesAvail > 0) do
+              begin
+                if ReadFile(ReadPipe, Buffer, SizeOf(Buffer) - 1, BytesRead, nil) and (BytesRead > 0) then
+                begin
+                  Buffer[BytesRead] := #0;
+                  OutputBuilder.Append(string(AnsiString(Buffer)));
+                end
+                else
+                  Break;
+              end;
+              Break;
+            end;
+
+            // Check timeout
+            if GetTickCount - StartTick > TimeoutMs then
+            begin
+              TerminateProcess(ProcessInfo.hProcess, 1);
+              LogMessage('Timeout waiting for command: ' + Command, lcRed);
+              Break;
+            end;
           end;
-        end
-        else
-        begin
-          TerminateProcess(ProcessInfo.hProcess, 1);
-          LogMessage('Timeout waiting for command: ' + Command, lcRed);
         end;
+
+        Result := Trim(OutputBuilder.ToString);
       finally
         CloseHandle(ProcessInfo.hProcess);
         CloseHandle(ProcessInfo.hThread);
@@ -134,6 +172,7 @@ begin
     else
       LogMessage('Failed to create process for command output: ' + Command, lcRed);
   finally
+    OutputBuilder.Free;
     if WritePipe <> 0 then CloseHandle(WritePipe);
     CloseHandle(ReadPipe);
   end;
