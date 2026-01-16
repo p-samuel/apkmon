@@ -53,6 +53,7 @@ begin
 
   // Create components
   FADBExecutor := TADBExecutor.Create;
+  FADBExecutor.WarmUp;
   FProjectManager := TProjectManager.Create(WatchDir);
   FProjectManager.ProjectNames.Assign(ProjectNames);
 

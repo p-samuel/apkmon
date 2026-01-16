@@ -9,6 +9,7 @@ uses
 type
   TADBExecutor = class
   public
+    procedure WarmUp;
     function ExecuteCommand(const Command: string; ShowOutput: Boolean = True; TimeoutMs: DWORD = 0): Boolean;
     function GetCommandOutput(const Command: string; TimeoutMs: DWORD = 10000): string;
     function GetDevices: TStringList;
@@ -18,9 +19,26 @@ type
     function IsABICompatible(const TargetAbi, DeviceAbiList: string): Boolean;
   end;
 
+
 implementation
 
 { TADBExecutor }
+
+procedure TADBExecutor.WarmUp;
+var
+  Output: string;
+begin
+  LogMessage('Starting ADB server...', lcBlue);
+  Output := GetCommandOutput('adb start-server', 15000);
+  if Pos('daemon started', LowerCase(Output)) > 0 then
+    LogMessage('ADB daemon started', lcGreen)
+  else
+    LogMessage('ADB server ready', lcGreen);
+
+  Output := GetCommandOutput('adb mdns check', 5000);
+  if Trim(Output) <> '' then
+    LogMessage('mDNS: ' + Trim(Output), lcBlue);
+end;
 
 function TADBExecutor.ExecuteCommand(const Command: string; ShowOutput: Boolean = True; TimeoutMs: DWORD = 0): Boolean;
 var
