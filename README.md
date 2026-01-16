@@ -55,6 +55,7 @@ Run `apkmon.exe` and follow these prompts to configure watch directory, projects
 |---------|-------------|
 | `devices` | List connected devices |
 | `pair <ip>:<port>` | Pair WiFi device (Android 11+) |
+| `qrpair` | QR code pairing (scan with device) |
 | `connect <ip>:<port>` | Connect to WiFi device |
 | `disconnect [<ip>:<port>]` | Disconnect WiFi device(s) |
 

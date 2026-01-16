@@ -17,7 +17,9 @@ uses
   APKMon.Recorder in 'src\APKMon.Recorder.pas',
   APKMon.FPS in 'src\APKMon.FPS.pas',
   APKMon.Profile in 'src\APKMon.Profile.pas',
-  APKMon.App in 'src\APKMon.App.pas';
+  APKMon.App in 'src\APKMon.App.pas',
+  QRCode in 'src\QRCode.pas',
+  APKMon.QRPair in 'src\APKMon.QRPair.pas';
 
 var
   App: TAppRunner;

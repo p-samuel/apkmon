@@ -6,7 +6,7 @@ uses
   Windows, SysUtils, Classes, Generics.Collections, DateUtils,
   APKMon.Types, APKMon.Utils, APKMon.ADB, APKMon.Projects, APKMon.Monitor,
   APKMon.Deployer, APKMon.Logcat, APKMon.Recorder, APKMon.FPS, APKMon.Profile,
-  APKMon.Console;
+  APKMon.Console, APKMon.QRPair;
 
 type
   TMonitorState = class
@@ -40,6 +40,7 @@ type
     procedure HandleResume;
     procedure HandleDevices;
     procedure HandlePair(const Param: string);
+    procedure HandleQrpair;
     procedure HandleConnect(const Param: string);
     procedure HandleDisconnect(const Param: string);
     procedure HandleBuild(const Param: string);
@@ -131,6 +132,7 @@ begin
     Writeln('  resume              - Resume auto-detection');
     Writeln('  devices             - List connected devices (USB and WiFi)');
     Writeln('  pair <ip>:<port>    - Pair with WiFi device (Android 11+)');
+    Writeln('  qrpair              - QR pairing via Android built-in scanner');
     Writeln('  connect <ip>:<port> - Connect to WiFi device');
     Writeln('  disconnect [<ip>:<port>] - Disconnect WiFi device(s)');
     Writeln('  logcat [filter]     - Start logcat (optional package filter)');
@@ -216,6 +218,18 @@ begin
     end
     else
       Writeln('Pairing cancelled.');
+  end;
+end;
+
+procedure TInputThread.HandleQrpair;
+var
+  NativePairing: TQRNativePairing;
+begin
+  NativePairing := TQRNativePairing.Create(FADBExecutor);
+  try
+    NativePairing.Start;
+  finally
+    NativePairing.Free;
   end;
 end;
 
@@ -560,6 +574,12 @@ begin
     begin
       Param := Trim(Copy(Input, 6, MaxInt));
       HandlePair(Param);
+      Continue;
+    end;
+
+    if SameText(Input, 'qrpair') then
+    begin
+      HandleQrpair;
       Continue;
     end;
 

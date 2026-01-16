@@ -184,14 +184,20 @@
         <DCCReference Include="src\APKMon.Console.pas"/>
         <DCCReference Include="src\APKMon.Types.pas"/>
         <DCCReference Include="src\APKMon.Utils.pas"/>
+        <DCCReference Include="src\APKMon.Config.pas"/>
         <DCCReference Include="src\APKMon.ADB.pas"/>
         <DCCReference Include="src\APKMon.Projects.pas"/>
         <DCCReference Include="src\APKMon.Monitor.pas"/>
         <DCCReference Include="src\APKMon.Deployer.pas"/>
         <DCCReference Include="src\APKMon.Commands.pas"/>
         <DCCReference Include="src\APKMon.Watcher.pas"/>
-        <DCCReference Include="src\APKMon.App.pas"/>
         <DCCReference Include="src\APKMon.Logcat.pas"/>
+        <DCCReference Include="src\APKMon.Recorder.pas"/>
+        <DCCReference Include="src\APKMon.FPS.pas"/>
+        <DCCReference Include="src\APKMon.Profile.pas"/>
+        <DCCReference Include="src\APKMon.App.pas"/>
+        <DCCReference Include="src\QRCode.pas"/>
+        <DCCReference Include="src\APKMon.QRPair.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
