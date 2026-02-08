@@ -3,248 +3,367 @@ unit APKMon.QRPair;
 interface
 
 uses
-  System.SysUtils, System.Classes, QRCode, APKMon.ADB;
+  System.SysUtils, System.Classes, System.SyncObjs, System.JSON,
+  IdHTTPServer, IdContext, IdCustomHTTPServer, IdGlobal, IdStack,
+  QRCode, APKMon.ADB, APKMon.Utils, APKMon.Console;
 
 type
-  TQRNativePairing = class
+  TConnectInfo = record
+    IP: string;
+    PairPort: Integer;
+    Code: string;
+    ConnectPort: Integer;
+  end;
+
+  TConnectResult = record
+    Success: Boolean;
+    Message: string;
+  end;
+
+  TOnConnectEvent = function(const Info: TConnectInfo): TConnectResult of object;
+
+  TQRHttpServer = class
+  private
+    FServer: TIdHTTPServer;
+    FOnConnect: TOnConnectEvent;
+    FPort: Integer;
+    procedure HandleRequest(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
+    procedure AddCORSHeaders(AResponseInfo: TIdHTTPResponseInfo);
+    procedure SendJSON(AResponseInfo: TIdHTTPResponseInfo; StatusCode: Integer; const JSON: string);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Start;
+    procedure Stop;
+    function GetLanIP: string;
+    property Port: Integer read FPort;
+    property OnConnect: TOnConnectEvent read FOnConnect write FOnConnect;
+  end;
+
+  TQRHttpPairing = class
   private
     FADBExecutor: TADBExecutor;
-    FServiceName: string;
-    FPassword: string;
-    function GenerateRandomString(Len: Integer): string;
-    function FindServiceInMdns(out IP: string; out PairPort: Integer; out ConnectPort: Integer): Boolean;
-    function FindConnectPortForIP(const IP: string): Integer;
+    FServer: TQRHttpServer;
+    FEvent: TEvent;
+    FLock: TCriticalSection;
+    FResult: TConnectResult;
+    function HandleConnect(const Info: TConnectInfo): TConnectResult;
   public
     constructor Create(ADBExecutor: TADBExecutor);
+    destructor Destroy; override;
     procedure Start;
   end;
 
+  TQRNativePairing = TQRHttpPairing;
+
 implementation
 
-{ TQRNativePairing }
+{ TQRHttpServer }
 
-constructor TQRNativePairing.Create(ADBExecutor: TADBExecutor);
+constructor TQRHttpServer.Create;
 begin
   inherited Create;
-  FADBExecutor := ADBExecutor;
-  // Generate random service name and password
-  FServiceName := 'apkmon-' + GenerateRandomString(6);
-  FPassword := GenerateRandomString(10);
+  FServer := TIdHTTPServer.Create(nil);
+  FServer.ParseParams := False;
+  FServer.OnCommandGet := HandleRequest;
+  FServer.OnCommandOther := HandleRequest;
+  FServer.DefaultPort := 0;
 end;
 
-function TQRNativePairing.GenerateRandomString(Len: Integer): string;
-const
-  Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+destructor TQRHttpServer.Destroy;
+begin
+  Stop;
+  FServer.Free;
+  inherited Destroy;
+end;
+
+function TQRHttpServer.GetLanIP: string;
 var
+  Addresses: TIdStackLocalAddressList;
   I: Integer;
+  Addr: string;
 begin
-  Randomize;
-  SetLength(Result, Len);
-  for I := 1 to Len do
-    Result[I] := Chars[Random(Length(Chars)) + 1];
-end;
-
-function TQRNativePairing.FindServiceInMdns(out IP: string; out PairPort: Integer; out ConnectPort: Integer): Boolean;
-var
-  Output: string;
-  Lines: TStringList;
-  I, P, ColonPos: Integer;
-  Line, AddrPart: string;
-  FoundIP: string;
-begin
-  Result := False;
-  IP := '';
-  PairPort := 0;
-  ConnectPort := 0;
-  FoundIP := '';
-
-  // Query mDNS services
-  Output := FADBExecutor.GetCommandOutput('adb mdns services', 5000);
-
-  Lines := TStringList.Create;
+  Result := '127.0.0.1';
+  Addresses := TIdStackLocalAddressList.Create;
   try
-    Lines.Text := Output;
-    for I := 0 to Lines.Count - 1 do
-    begin
-      Line := Lines[I];
-
-      // Look for our service name in _adb-tls-pairing entries
-      if (Pos('_adb-tls-pairing', Line) > 0) and (Pos(FServiceName, Line) > 0) then
-      begin
-        // Find IP:PORT pattern - look for number.number.number.number:number
-        for P := 1 to Length(Line) - 10 do
-        begin
-          if CharInSet(Line[P], ['0'..'9']) and (Pos('.', Copy(Line, P, 15)) > 0) and (Pos(':', Copy(Line, P, 20)) > 0) then
-          begin
-            AddrPart := Copy(Line, P, 25);
-            ColonPos := Pos(':', AddrPart);
-            if ColonPos > 7 then  // At least x.x.x.x:
-            begin
-              FoundIP := Trim(Copy(AddrPart, 1, ColonPos - 1));
-              PairPort := StrToIntDef(Trim(Copy(AddrPart, ColonPos + 1, 5)), 0);
-              if (FoundIP <> '') and (PairPort > 0) then
-              begin
-                IP := FoundIP;
-                Result := True;
-                Break;
-              end;
-            end;
-          end;
-        end;
-      end;
-
-      // Also look for _adb-tls-connect with same IP to get connect port
-      if (FoundIP <> '') and (Pos('_adb-tls-connect', Line) > 0) and (Pos(FoundIP, Line) > 0) then
-      begin
-        P := Pos(FoundIP + ':', Line);
-        if P > 0 then
-        begin
-          AddrPart := Copy(Line, P + Length(FoundIP) + 1, 10);
-          ConnectPort := StrToIntDef(Trim(AddrPart), 0);
+    GStack.GetLocalAddressList(Addresses);
+    for I := 0 to Addresses.Count - 1 do begin
+      if Addresses[I].IPVersion = Id_IPv4 then begin
+        Addr := Addresses[I].IPAddress;
+        if (Addr <> '127.0.0.1') and (Pos('169.254.', Addr) <> 1) then begin
+          Result := Addr;
+          Exit;
         end;
       end;
     end;
   finally
-    Lines.Free;
+    Addresses.Free;
   end;
 end;
 
-function TQRNativePairing.FindConnectPortForIP(const IP: string): Integer;
-var
-  Output: string;
-  Lines: TStringList;
-  I, P: Integer;
-  Line, AddrPart: string;
+procedure TQRHttpServer.Start;
 begin
-  Result := 0;
-
-  // Query mDNS services for fresh connect port
-  Output := FADBExecutor.GetCommandOutput('adb mdns services', 5000);
-
-  Lines := TStringList.Create;
-  try
-    Lines.Text := Output;
-    for I := 0 to Lines.Count - 1 do
-    begin
-      Line := Lines[I];
-
-      // Look for _adb-tls-connect with matching IP
-      if (Pos('_adb-tls-connect', Line) > 0) and (Pos(IP, Line) > 0) then
-      begin
-        P := Pos(IP + ':', Line);
-        if P > 0 then
-        begin
-          AddrPart := Copy(Line, P + Length(IP) + 1, 10);
-          Result := StrToIntDef(Trim(AddrPart), 0);
-          if Result > 0 then
-            Exit;
-        end;
-      end;
-    end;
-  finally
-    Lines.Free;
-  end;
+  FServer.Active := True;
+  FPort := FServer.Bindings[0].Port;
 end;
 
-procedure TQRNativePairing.Start;
-var
-  QR: TQRCode;
-  QRData: string;
-  IP: string;
-  PairPort, ConnectPort: Integer;
-  Attempts, ConnectRetry: Integer;
-  Output: string;
+procedure TQRHttpServer.Stop;
 begin
-  // Format: WIFI:T:ADB;S:<service-name>;P:<password>;;
-  QRData := Format('WIFI:T:ADB;S:%s;P:%s;;', [FServiceName, FPassword]);
+  if FServer.Active then
+    FServer.Active := False;
+end;
 
-  // Display QR code
-  QR := TQRCode.Create;
-  try
-    QR.Generate(QRData);
-    QR.RenderToConsole;
-    Writeln;
-    Writeln('On your Android device:');
-    Writeln('  1. Go to Settings > Developer options > Wireless debugging');
-    Writeln('  2. Tap "Pair device with QR code"');
-    Writeln('  3. Scan this QR code');
-    Writeln;
-    Writeln('Service: ', FServiceName);
-    Writeln('Password: ', FPassword);
-    Writeln;
-    Writeln('Waiting for device to appear via mDNS...');
-    Writeln('Press Ctrl+C to cancel');
-    Writeln;
-  finally
-    QR.Free;
+procedure TQRHttpServer.AddCORSHeaders(AResponseInfo: TIdHTTPResponseInfo);
+begin
+  AResponseInfo.CustomHeaders.Values['Access-Control-Allow-Origin'] := '*';
+  AResponseInfo.CustomHeaders.Values['Access-Control-Allow-Methods'] := 'POST, OPTIONS';
+  AResponseInfo.CustomHeaders.Values['Access-Control-Allow-Headers'] := 'Content-Type';
+end;
+
+procedure TQRHttpServer.SendJSON(AResponseInfo: TIdHTTPResponseInfo; StatusCode: Integer; const JSON: string);
+begin
+  AResponseInfo.ResponseNo := StatusCode;
+  AResponseInfo.ContentType := 'application/json';
+  AResponseInfo.ContentText := JSON;
+end;
+
+procedure TQRHttpServer.HandleRequest(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
+var
+  Body: string;
+  JSONObj: TJSONObject;
+  Info: TConnectInfo;
+  ConnResult: TConnectResult;
+  PortValue: TJSONValue;
+  Bytes: TBytes;
+  ResponseJSON: string;
+begin
+  AddCORSHeaders(AResponseInfo);
+
+  if ARequestInfo.CommandType = hcOption then begin
+    AResponseInfo.ResponseNo := 204;
+    Exit;
   end;
 
-  // Poll mDNS for our service (captures both pair and connect ports in one query)
-  Attempts := 0;
-  while Attempts < 60 do  // 60 attempts * 2 seconds = 2 minutes timeout
-  begin
-    if FindServiceInMdns(IP, PairPort, ConnectPort) then
-    begin
-      Writeln('Device found!');
-      Writeln('  IP: ', IP);
-      Writeln('  Pairing Port: ', PairPort);
-      if ConnectPort > 0 then
-        Writeln('  Connect Port: ', ConnectPort);
-      Writeln;
+  if (ARequestInfo.CommandType <> hcPost) or (ARequestInfo.Document <> '/connect') then begin
+    SendJSON(AResponseInfo, 404, '{"error":"Not found"}');
+    Exit;
+  end;
 
-      // Execute pairing
-      Writeln('Executing: adb pair ', IP, ':', PairPort, ' ', FPassword);
-      FADBExecutor.ExecuteCommand(Format('adb pair %s:%d %s', [IP, PairPort, FPassword]));
+  // Read POST body (raw bytes, decode as UTF-8)
+  if (ARequestInfo.PostStream <> nil) and (ARequestInfo.PostStream.Size > 0) then begin
+    ARequestInfo.PostStream.Position := 0;
+    SetLength(Bytes, ARequestInfo.PostStream.Size);
+    ARequestInfo.PostStream.Read(Bytes[0], Length(Bytes));
+    Body := TEncoding.UTF8.GetString(Bytes);
+  end;
 
-      // Re-query mDNS for fresh connect port after pairing
-      Sleep(500);
-      ConnectPort := FindConnectPortForIP(IP);
-      if ConnectPort > 0 then
-        Writeln('  Fresh Connect Port: ', ConnectPort);
+  if Body = '' then
+    Body := ARequestInfo.UnparsedParams;
 
-      // Connect using discovered port with retry
-      if ConnectPort > 0 then
-      begin
-        for ConnectRetry := 1 to 3 do
-        begin
-          Sleep(1000);
-          Writeln;
-          Writeln('Executing: adb connect ', IP, ':', ConnectPort, ' (attempt ', ConnectRetry, '/3)');
-          Output := FADBExecutor.GetCommandOutput(Format('adb connect %s:%d', [IP, ConnectPort]), 5000);
-          Writeln(Output);
-          if Pos('connected to', Output) > 0 then
-          begin
-            Writeln;
-            Writeln('Done!');
-            Exit;
-          end;
-          if ConnectRetry < 3 then
-            Writeln('Retrying...');
-        end;
-        Writeln;
-        Writeln('Connection failed after 3 attempts.');
-        Writeln('Check your device for the connection port and run:');
-        Writeln('  connect <ip>:<port>');
-      end
-      else
-      begin
-        Writeln;
-        Writeln('Pairing complete! Connection port not discovered.');
-        Writeln('Check your device for the connection port and run:');
-        Writeln('  connect <ip>:<port>');
-      end;
+  if Body = '' then begin
+    SendJSON(AResponseInfo, 400, '{"error":"Empty body"}');
+    Exit;
+  end;
+
+  try
+    JSONObj := TJSONObject.ParseJSONValue(Body) as TJSONObject;
+  except
+    SendJSON(AResponseInfo, 400, '{"error":"Invalid JSON"}');
+    Exit;
+  end;
+
+  if JSONObj = nil then begin
+    SendJSON(AResponseInfo, 400, '{"error":"Invalid JSON"}');
+    Exit;
+  end;
+
+  try
+    Info.IP := JSONObj.GetValue<string>('ip', '');
+    Info.Code := JSONObj.GetValue<string>('code', '');
+
+    PortValue := JSONObj.GetValue('pairPort');
+    if PortValue is TJSONNumber then
+      Info.PairPort := TJSONNumber(PortValue).AsInt
+    else if PortValue is TJSONString then
+      Info.PairPort := StrToIntDef(PortValue.Value, 0)
+    else
+      Info.PairPort := 0;
+
+    PortValue := JSONObj.GetValue('connectPort');
+    if PortValue is TJSONNumber then
+      Info.ConnectPort := TJSONNumber(PortValue).AsInt
+    else if PortValue is TJSONString then
+      Info.ConnectPort := StrToIntDef(PortValue.Value, 0)
+    else
+      Info.ConnectPort := 0;
+
+    if (Info.IP = '') or (Info.PairPort = 0) or (Info.Code = '') or (Info.ConnectPort = 0) then begin
+      SendJSON(AResponseInfo, 400, '{"error":"Missing required fields: ip, pairPort, code, connectPort"}');
       Exit;
     end;
 
-    Inc(Attempts);
-    Write('.');
-    Sleep(2000);
+    if Assigned(FOnConnect) then
+      ConnResult := FOnConnect(Info)
+    else begin
+      ConnResult.Success := False;
+      ConnResult.Message := 'No handler configured';
+    end;
+
+    ResponseJSON := Format('{"success":%s,"message":"%s"}', [LowerCase(BoolToStr(ConnResult.Success, True)), StringReplace(ConnResult.Message, '"', '\"', [rfReplaceAll])]);
+    SendJSON(AResponseInfo, 200, ResponseJSON);
+  finally
+    JSONObj.Free;
+  end;
+end;
+
+{ TQRHttpPairing }
+
+constructor TQRHttpPairing.Create(ADBExecutor: TADBExecutor);
+begin
+  inherited Create;
+  FADBExecutor := ADBExecutor;
+  FEvent := TEvent.Create(nil, True, False, '');
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TQRHttpPairing.Destroy;
+begin
+  FLock.Free;
+  FEvent.Free;
+  inherited Destroy;
+end;
+
+function TQRHttpPairing.HandleConnect(const Info: TConnectInfo): TConnectResult;
+var
+  Output: string;
+  ConnectRetry: Integer;
+begin
+  Result.Success := False;
+  Result.Message := '';
+
+  LogMessage(Format('Device connecting: %s (pair port %d, connect port %d)', [Info.IP, Info.PairPort, Info.ConnectPort]), lcCyan);
+
+  // Pair using pairPort + code
+  LogMessage(Format('Executing: adb pair %s:%d %s', [Info.IP, Info.PairPort, Info.Code]), lcBlue);
+  Output := FADBExecutor.GetCommandOutput(Format('adb pair %s:%d %s', [Info.IP, Info.PairPort, Info.Code]), 10000);
+  LogMessage('Pair result: ' + Output, lcDefault);
+
+  if (Pos('Successfully paired', Output) = 0) and (Pos('already paired', LowerCase(Output)) = 0) then begin
+    Result.Message := 'Pairing failed: ' + Output;
+    FLock.Enter;
+    try
+      FResult := Result;
+    finally
+      FLock.Leave;
+    end;
+    FEvent.SetEvent;
+    Exit;
   end;
 
-  Writeln;
-  Writeln('Timeout waiting for device. Make sure:');
-  Writeln('  - Device and PC are on the same network');
-  Writeln('  - You scanned the QR code in Wireless debugging settings');
+  // Connect using connectPort with retries
+  for ConnectRetry := 1 to 3 do begin
+    Sleep(1000);
+    LogMessage(Format('Executing: adb connect %s:%d (attempt %d/3)', [Info.IP, Info.ConnectPort, ConnectRetry]), lcBlue);
+    Output := FADBExecutor.GetCommandOutput(Format('adb connect %s:%d', [Info.IP, Info.ConnectPort]), 5000);
+    LogMessage('Connect result: ' + Output, lcDefault);
+
+    if Pos('connected to', LowerCase(Output)) > 0 then begin
+      Result.Success := True;
+      Result.Message := Format('Connected to %s:%d', [Info.IP, Info.ConnectPort]);
+      Break;
+    end;
+
+    if ConnectRetry < 3 then
+      LogMessage('Retrying...', lcYellow);
+  end;
+
+  if not Result.Success then
+    Result.Message := 'Pairing succeeded but connection failed after 3 attempts: ' + Output;
+
+  FLock.Enter;
+  try
+    FResult := Result;
+  finally
+    FLock.Leave;
+  end;
+  FEvent.SetEvent;
+end;
+
+procedure TQRHttpPairing.Start;
+var
+  QR: TQRCode;
+  LanIP, URL: string;
+  WaitResult: TWaitResult;
+begin
+  FServer := TQRHttpServer.Create;
+  try
+    FServer.OnConnect := HandleConnect;
+    LanIP := FServer.GetLanIP;
+    FServer.Start;
+    URL := Format('http://%s:%d/connect', [LanIP, FServer.Port]);
+
+    QR := TQRCode.Create;
+    try
+      QR.Generate(URL);
+      QR.RenderToConsole;
+    finally
+      QR.Free;
+    end;
+
+    Console.Lock;
+    try
+      Writeln;
+      Writeln('Scan this QR code with the APKMon companion app.');
+      Writeln;
+      Writeln('The app will send your device''s pairing info automatically.');
+      Writeln('URL: ', URL);
+      Writeln;
+      Writeln('Or test with curl:');
+      Writeln('  curl -X POST ', URL, ' -H "Content-Type: application/json" \');
+      Writeln('    -d "{"ip":"<device-ip>","pairPort":<pair-port>,"code":"<code>","connectPort":<connect-port>}"');
+      Writeln;
+      Writeln('Waiting for connection (2 min timeout)...');
+      Writeln;
+    finally
+      Console.Unlock;
+    end;
+
+    WaitResult := FEvent.WaitFor(120000);
+
+    Console.Lock;
+    try
+      if WaitResult = wrSignaled then begin
+        FLock.Enter;
+        try
+          if FResult.Success then begin
+            Writeln;
+            LogMessage(FResult.Message, lcGreen);
+            Writeln('Done!');
+          end else begin
+            Writeln;
+            LogMessage(FResult.Message, lcRed);
+            Writeln('You can try manually:');
+            Writeln('  pair <ip>:<port>');
+            Writeln('  connect <ip>:<port>');
+          end;
+        finally
+          FLock.Leave;
+        end;
+      end else begin
+        Writeln;
+        LogMessage('Timeout waiting for connection.', lcYellow);
+        Writeln('Make sure:');
+        Writeln('  - Device and PC are on the same network');
+        Writeln('  - The companion app scanned the QR code');
+        Writeln('  - Wireless debugging is enabled on the device');
+      end;
+    finally
+      Console.Unlock;
+    end;
+  finally
+    FServer.Free;
+    FServer := nil;
+  end;
 end;
 
 end.
