@@ -26,6 +26,7 @@ type
   public
     constructor Create(const DeviceId, SessionId: string);
     destructor Destroy; override;
+    procedure RequestStop;
     procedure Stop;
     property DeviceId: string read FDeviceId;
     property SessionId: string read FSessionId;
@@ -166,6 +167,11 @@ begin
   LogMessage('Screen recording stopped', lcYellow);
 end;
 
+procedure TScreenRecorderThread.RequestStop;
+begin
+  FStopRequested := True;
+end;
+
 procedure TScreenRecorderThread.Stop;
 begin
   FStopRequested := True;
@@ -242,18 +248,20 @@ end;
 procedure TScreenRecorderManager.StopRecordingProcess;
 var
   PIDOutput, PID: string;
+  WaitCount: Integer;
 begin
-  // Get PID of screenrecord process on device
-  PIDOutput := FADBExecutor.GetCommandOutput(
-    Format('adb -s %s shell pidof screenrecord', [FCurrentDeviceId]));
-
+  PIDOutput := FADBExecutor.GetCommandOutput(Format('adb -s %s shell pidof screenrecord', [FCurrentDeviceId]));
   PID := Trim(PIDOutput);
-  if PID <> '' then
-  begin
-    // Send SIGINT (2) to gracefully stop screenrecord
-    FADBExecutor.ExecuteCommand(
-      Format('adb -s %s shell kill -2 %s', [FCurrentDeviceId, PID]), False);
-    Sleep(500); // Give it time to finalize the file
+  if PID <> '' then begin
+    // Send SIGINT (2) to gracefully stop screenrecord (writes moov atom)
+    FADBExecutor.ExecuteCommand(Format('adb -s %s shell kill -2 %s', [FCurrentDeviceId, PID]), False);
+    // Poll until screenrecord exits (up to 5 seconds)
+    for WaitCount := 1 to 10 do begin
+      Sleep(500);
+      PIDOutput := FADBExecutor.GetCommandOutput(Format('adb -s %s shell pidof screenrecord', [FCurrentDeviceId]));
+      if Trim(PIDOutput) = '' then
+        Break;
+    end;
   end;
 end;
 
@@ -421,21 +429,18 @@ begin
   LogMessage('Stopping recording...', lcBlue);
   FState := rsStopping;
 
-  // Signal thread to stop BEFORE killing process to prevent new segment
+  // Prevent thread from starting new segments
   if FRecorderThread <> nil then
-    FRecorderThread.Stop;
+    FRecorderThread.RequestStop;
 
-  // Stop the screenrecord process on device
+  // Gracefully stop screenrecord on device FIRST (writes moov atom)
   StopRecordingProcess;
 
-  // Wait for thread to finish
-  if FRecorderThread <> nil then
-  begin
+  // Now kill local adb process and wait for thread
+  if FRecorderThread <> nil then begin
+    FRecorderThread.Stop;
     FRecorderThread.WaitFor;
-
-    // Pull and merge segments
     PullAndMergeSegments;
-
     FreeAndNil(FRecorderThread);
   end;
 
