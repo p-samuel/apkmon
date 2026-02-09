@@ -98,12 +98,12 @@ var
   Command: string;
   DevicePath: string;
 begin
-  DevicePath := GetCurrentDevicePath;
-  FSegmentPaths.Add(DevicePath);
+  if FStopRequested then
+    Exit;
 
-  // Build screenrecord command with high bitrate for 60fps
-  Command := Format('adb -s %s shell screenrecord --bit-rate 20000000 %s',
-    [FDeviceId, DevicePath]);
+  DevicePath := GetCurrentDevicePath;
+
+  Command := Format('adb -s %s shell screenrecord --bit-rate 20000000 %s', [FDeviceId, DevicePath]);
 
   FillChar(StartupInfo, SizeOf(TStartupInfo), 0);
   StartupInfo.cb := SizeOf(TStartupInfo);
@@ -112,29 +112,23 @@ begin
 
   FillChar(FCurrentProcess, SizeOf(TProcessInformation), 0);
 
-  if not CreateProcess(nil, PChar(Command), nil, nil, False, CREATE_NO_WINDOW,
-    nil, nil, StartupInfo, FCurrentProcess) then
-  begin
+  if CreateProcess(nil, PChar(Command), nil, nil, False, CREATE_NO_WINDOW, nil, nil, StartupInfo, FCurrentProcess) then
+    FSegmentPaths.Add(DevicePath)
+  else begin
     LogMessage('Failed to start screenrecord: ' + SysErrorMessage(GetLastError), lcRed);
     FStopRequested := True;
   end;
 end;
 
 procedure TScreenRecorderThread.WaitForSegmentEnd;
-var
-  WaitResult: DWORD;
 begin
-  // Wait for process to end (either 180s limit or external kill)
-  while not FStopRequested do
-  begin
-    WaitResult := WaitForSingleObject(FCurrentProcess.hProcess, 500);
-    if WaitResult = WAIT_OBJECT_0 then
-      Break; // Process ended (180s limit reached or killed)
+  // Wait for process to actually end (180s limit, SIGINT, or TerminateProcess)
+  while FCurrentProcess.hProcess <> 0 do begin
+    if WaitForSingleObject(FCurrentProcess.hProcess, 500) = WAIT_OBJECT_0 then
+      Break;
   end;
 
-  // Clean up process handles
-  if FCurrentProcess.hProcess <> 0 then
-  begin
+  if FCurrentProcess.hProcess <> 0 then begin
     CloseHandle(FCurrentProcess.hProcess);
     CloseHandle(FCurrentProcess.hThread);
     FillChar(FCurrentProcess, SizeOf(TProcessInformation), 0);
@@ -433,10 +427,10 @@ begin
   if FRecorderThread <> nil then
     FRecorderThread.RequestStop;
 
-  // Gracefully stop screenrecord on device FIRST (writes moov atom)
+  // Gracefully stop screenrecord on device (writes moov atom, waits for exit)
   StopRecordingProcess;
 
-  // Now kill local adb process and wait for thread
+  // Kill local adb process (fallback) and wait for thread
   if FRecorderThread <> nil then begin
     FRecorderThread.Stop;
     FRecorderThread.WaitFor;
